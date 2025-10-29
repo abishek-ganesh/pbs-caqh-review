@@ -10,7 +10,7 @@ pdfplumber==0.10.3
 
 # Configuration and data models
 pyyaml==6.0.1
-pydantic==2.5.0
+pydantic>=2.10.0
 
 # Date/time utilities
 python-dateutil==2.8.2
