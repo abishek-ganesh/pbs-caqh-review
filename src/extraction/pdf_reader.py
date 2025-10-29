@@ -64,28 +64,34 @@ def read_pdf_text(pdf_path: str) -> str:
         raise PDFReadError(f"Path is not a file: {pdf_path}")
 
     # Strategy 1: Try pdfplumber first (best for native PDFs)
+    pdfplumber_error = None
+    pypdf2_error = None
+    ocr_error = None
+    pdfplumber_text_length = 0
+    pypdf2_text_length = 0
+
     try:
         text = _extract_with_pdfplumber(pdf_path)
+        pdfplumber_text_length = len(text) if text else 0
 
         # If we got ANY text, use it (even if minimal)
         if text and len(text.strip()) > 0:
             return text
 
-    except Exception as pdfplumber_error:
-        # pdfplumber failed, will try PyPDF2 below
-        pass
+    except Exception as e:
+        pdfplumber_error = str(e)
 
     # Strategy 2: Try PyPDF2 as fallback
     try:
         text = _extract_with_pypdf2(pdf_path)
+        pypdf2_text_length = len(text) if text else 0
 
         # If we got ANY text, use it
         if text and len(text.strip()) > 0:
             return text
 
-    except Exception as pypdf2_error:
-        # PyPDF2 also failed
-        pass
+    except Exception as e:
+        pypdf2_error = str(e)
 
     # Strategy 3: Try OCR only if both native methods failed to get ANY text
     if OCR_AVAILABLE:
@@ -93,14 +99,27 @@ def read_pdf_text(pdf_path: str) -> str:
             text = extract_with_ocr(pdf_path)
             if text and len(text.strip()) > 0:
                 return text
-        except Exception as ocr_error:
-            pass
+        except Exception as e:
+            ocr_error = str(e)
 
-    # If we get here, all methods failed
-    raise PDFReadError(
-        "Failed to extract text from PDF. The PDF may be corrupted, encrypted, "
-        "or is a scanned image without OCR capability."
-    )
+    # If we get here, all methods failed - provide detailed error info
+    error_details = []
+
+    # Include extraction attempts and text lengths
+    error_details.append(f"pdfplumber extracted {pdfplumber_text_length} chars")
+    if pdfplumber_error:
+        error_details.append(f"pdfplumber error: {pdfplumber_error}")
+
+    error_details.append(f"PyPDF2 extracted {pypdf2_text_length} chars")
+    if pypdf2_error:
+        error_details.append(f"PyPDF2 error: {pypdf2_error}")
+
+    if ocr_error:
+        error_details.append(f"OCR error: {ocr_error}")
+
+    error_msg = "Failed to extract text from PDF. " + " | ".join(error_details)
+
+    raise PDFReadError(error_msg)
 
 
 def _extract_with_pdfplumber(pdf_path: str) -> str:
