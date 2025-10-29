@@ -137,11 +137,16 @@ def _extract_with_pdfplumber(pdf_path: str) -> str:
         Extracted text from all pages with proper reading order
     """
     text_parts = []
+    total_pages = 0
+    total_words = 0
 
     with pdfplumber.open(pdf_path) as pdf:
+        total_pages = len(pdf.pages)
+
         for page_num, page in enumerate(pdf.pages, start=1):
             # Extract words with their coordinates
             words = page.extract_words()
+            total_words += len(words) if words else 0
 
             if not words:
                 continue
@@ -195,7 +200,16 @@ def _extract_with_pdfplumber(pdf_path: str) -> str:
                 text_parts.append(f"\n--- Page {page_num} ---\n")
                 text_parts.append("\n".join(page_lines))
 
-    return "".join(text_parts)
+    result = "".join(text_parts)
+
+    # If extraction failed, raise error with diagnostics
+    if not result or len(result.strip()) == 0:
+        raise Exception(
+            f"pdfplumber found {total_pages} pages and {total_words} words, "
+            f"but extracted 0 characters of text"
+        )
+
+    return result
 
 
 def _extract_with_pypdf2(pdf_path: str) -> str:
@@ -209,9 +223,11 @@ def _extract_with_pypdf2(pdf_path: str) -> str:
         Extracted text from all pages
     """
     text_parts = []
+    total_pages = 0
 
     with open(pdf_path, 'rb') as file:
         reader = PyPDF2.PdfReader(file)
+        total_pages = len(reader.pages)
 
         for page_num, page in enumerate(reader.pages, start=1):
             page_text = page.extract_text()
@@ -219,7 +235,15 @@ def _extract_with_pypdf2(pdf_path: str) -> str:
                 text_parts.append(f"\n--- Page {page_num} ---\n")
                 text_parts.append(page_text)
 
-    return "".join(text_parts)
+    result = "".join(text_parts)
+
+    # If extraction failed, raise error with diagnostics
+    if not result or len(result.strip()) == 0:
+        raise Exception(
+            f"PyPDF2 found {total_pages} pages but extracted 0 characters of text"
+        )
+
+    return result
 
 
 def is_scanned_pdf(text: str) -> bool:
