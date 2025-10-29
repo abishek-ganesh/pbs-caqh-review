@@ -1,0 +1,421 @@
+# CAQH Data Summary Validation Rules with Extraction Configuration
+# Last Updated: October 8, 2025
+#
+# This file contains validation rules AND extraction hints for all fields
+# extracted from CAQH PDFs.
+#
+# Structure for each field:
+#   field_name:
+#     # Validation configuration
+#     required: true/false
+#     validation_type: "format" | "date" | "text_presence" | "lookup"
+#     error_message: "Error message for validation failure"
+#     critical: true/false  # Is this a POC critical field?
+#
+#     # Extraction configuration
+#     extraction:
+#       labels: ["Label 1", "Label 2"]  # Text labels to search for in PDF
+#       pattern: "regex pattern"  # Regex to extract value
+#       section: "section_name"  # PDF section where field is located
+#       max_distance: 50  # Max characters after label to search
+#       confidence_threshold: 0.85  # Minimum confidence for valid extraction
+#
+# ============================================================================
+# POC CRITICAL FIELDS (5 Fields)
+# ============================================================================
+
+medicaid_id:
+  # Validation
+  required: false  # CONDITIONALLY required (state-dependent, provider may submit before Medicaid approval)
+  validation_type: "text_presence"
+  error_message: "Medicaid ID not found in CAQH Data Summary (may be required depending on state and approval status)"
+  critical: false  # Do NOT auto-reject if missing - complex conditional logic deferred to post-POC
+  field_category: "provider_identification"
+  notes: |
+    IMPORTANT (Oct 26, 2025 - Christian):
+    Medicaid ID is NOT always required!
+    - Different states have different Medicaid requirements
+    - Providers may submit CAQH before Medicaid approval (no ID yet)
+    - POC Scope: Just detect/extract presence, report but don't auto-reject if missing
+    - Future: Implement state-based conditional validation rules
+
+  # Extraction
+  extraction:
+    labels:
+      - "Medicaid Number"
+      - "Medicaid ID"
+      - "Medicaid Provider ID"
+    pattern: "\\d{8,12}"  # 8-12 digit number
+    pattern_required: true  # MUST match pattern - no line-based fallback for text values
+    section: "provider_information"
+    max_distance: 50
+    confidence_threshold: 0.85
+    notes: "Medicaid ID format varies by state but typically 8-12 digits"
+
+
+ssn:
+  # Validation
+  required: true
+  validation_type: "format"
+  format_regex: "^\\d{3}-\\d{2}-\\d{4}$|^\\d{9}$"
+  error_message: "SSN format invalid - must be XXX-XX-XXXX or XXXXXXXXX"
+  critical: true
+  field_category: "provider_identification"
+  requires_masking: true  # PHI - must be masked in logs
+
+  # Extraction
+  extraction:
+    labels:
+      - "Social Security Number"
+      - "SSN"
+      - "SS#"
+      - "Social Security #"
+    pattern: "\\d{3}-\\d{2}-\\d{4}|\\d{9}"
+    section: "provider_information"
+    max_distance: 150
+    confidence_threshold: 0.95  # High confidence required for SSN
+    requires_masking: true
+    notes: "SSN is PHI - must be handled securely and masked in logs"
+
+
+individual_npi:
+  # Validation
+  required: true
+  validation_type: "format"
+  format_regex: "^\\d{10}$"
+  luhn_checksum: true  # Must pass Luhn algorithm validation
+  error_message: "NPI must be exactly 10 digits and pass Luhn checksum validation"
+  critical: true
+  field_category: "provider_identification"
+
+  # Extraction
+  extraction:
+    labels:
+      - "Individual NPI"
+      - "Provider NPI"
+      - "NPI Number"
+      - "National Provider Identifier"
+      - "NPI"
+    pattern: "\\d{10}"
+    section: "provider_information"
+    max_distance: 150
+    confidence_threshold: 0.95
+    validation: "luhn_checksum"
+    notes: "NPI must be exactly 10 digits and pass Luhn checksum"
+
+
+practice_location_name:
+  # Validation
+  required: true
+  validation_type: "text_presence"
+  min_length: 2
+  max_length: 200
+  error_message: "Practice Location Name is required and must be 2-200 characters"
+  critical: true
+  field_category: "practice_location"
+
+  # Extraction
+  extraction:
+    labels:
+      - "Practice Name"
+      - "Practice Location Name"
+      - "Location Name"
+      - "Organization Name"
+      - "Positive Behavior Supports"  # Direct search for PBS
+      - "Name"
+    # STRICT PBS CORPORATION FORMAT ONLY
+    # Match ONLY "Positive Behavior Supports Corporation - {Region}" format
+    # The " - " separator is REQUIRED (with spaces around the dash)
+    # If name doesn't match this pattern, return None (not found)
+    # Comprehensive list of all PBS regions (as of Oct 2025)
+    pattern: "Positive\\s+Behavior\\s+Supports\\s+Corporation\\s+-\\s+(?:Alabama|Alaska|Arizona|Arkansas|Asheville|Austin|Broward|Capital|Central\\s+and\\s+Southern\\s+Illinois|Central\\s+Cali\\s+Coast|Central\\s+Florida|Central\\s+Michigan|Central\\s+Missouri|Central\\s+VA|Central\\s+Valley|Charlotte|Colorado|Columbia|Dallas/Fort\\s+Worth|District\\s+of\\s+Columbia|East\\s+Georgia|East\\s+Michigan|East\\s+Missouri|East\\s+Tennessee|East\\s+Texas|Eastern\\s+Mass|El\\s+Paso|Emerald\\s+Coast|Fayetteville|Greater\\s+Sacramento|Hawaii|Houston|Imperial\\s+Valley|Indiana|Inland\\s+Empire|Kansas\\s+City|LA\\s+Metro|Louisiana|Miami-Dade|Middle\\s+Georgia|Middle\\s+Tennessee|Myrtle\\s+beach|Nevada|New\\s+Mexico|North\\s+Florida|North\\s+Georgia|North\\s+Jersey|North\\s+MD|North\\s+Oregon|Northern\\s+Illinois|Northern\\s+VA|Ohio|Oklahoma|Palm\\s+Beach|Raleigh-Durham|River\\s+Valley|San\\s+Antonio|San\\s+Francisco|SC\\s+High\\s+Country|SC\\s+Low\\s+Country|SC\\s+Upstate|South\\s+Central\\s+Oregon|South\\s+Georgia|South\\s+Jersey|South\\s+MD|South\\s+Texas|Southeast\\s+PA|Southeast\\s+Tennessee|Southern\\s+Cali\\s+Coast|Southern\\s+California|Southwest|Space\\s+Coast|Suncoast|Suwannee\\s+River|Tidewater\\s+VA|Treasure\\s+Coast|Waco|Washington\\s+State|West\\s+Coast|West\\s+Michigan|West\\s+Missouri|West\\s+Tennessee|West\\s+Texas|Western\\s+Mass|Western\\s+PA|Wilmington|Winston-Salem|Wisconsin)"
+    pattern_required: true  # MUST match pattern - return None for non-PBS formats
+    section: "practice_locations"
+    max_distance: 200
+    confidence_threshold: 0.85
+    warnings:
+      short_name: "Practice Location Name is very short - may be incomplete"
+    notes: |
+      STRICT FORMAT VALIDATION: Only extracts PBS Corporation format with ' - ' separator.
+      Non-PBS organizations (e.g., 'Neuro Dverse LLC', 'Apara Autism Center') return None.
+      Pattern includes all 90+ PBS regions as of Oct 2025.
+
+      IMPORTANT (Oct 26, 2025 - Christian):
+      Providers may work for multiple organizations, but PBS Practice Location is ALWAYS REQUIRED.
+      Example: SD PDF shows "NeuroDverse LLC" (another org, NOT PBS) - this is an ERROR.
+      If AI cannot find PBS-specific practice location, treat as validation failure.
+
+
+professional_license_expiration_date:
+  # Validation
+  required: true
+  validation_type: "date"
+  must_be_future: true
+  warn_if_expires_within_days: 30
+  error_message: "Professional License Expiration Date must be a future date"
+  critical: true
+  field_category: "licensure"
+
+  # Extraction
+  extraction:
+    labels:
+      - "License Expiration"
+      - "Expiration Date"
+      - "License Exp"
+      - "Professional License Expiration Date"
+      - "License Expiry"
+      - "Expires"
+      - "Exp Date"
+    pattern: "\\d{1,2}/\\d{1,2}/\\d{4}|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}-\\d{1,2}-\\d{4}"
+    # Removed section restriction - "Expiration Date" appears in multiple sections (Professional License, Board Certification)
+    # section: "licensure"
+    max_distance: 60
+    confidence_threshold: 0.90
+    date_formats:
+      - "%m/%d/%Y"  # 12/31/2025
+      - "%Y-%m-%d"  # 2025-12-31
+      - "%m-%d-%Y"  # 12-31-2025
+    notes: "Must parse and validate as future date, warn if <30 days"
+
+
+# ============================================================================
+# POC TIER 2 FIELDS (Additional 10 fields for Week 1 expansion)
+# ============================================================================
+
+# These fields will be added as we expand from 5 to 15 critical fields
+
+first_name:
+  required: true
+  validation_type: "text_presence"
+  min_length: 2
+  max_length: 50
+  error_message: "First Name is required and must be 2-50 characters"
+  field_category: "provider_identification"
+  extraction:
+    labels:
+      - "First Name"
+      - "Given Name"
+      - "Legal First Name"
+    pattern: "[A-Za-z][A-Za-z\\s'-]{1,49}"
+    section: "provider_information"
+    max_distance: 40
+    confidence_threshold: 0.90
+    notes: "May include hyphens, apostrophes, and spaces (e.g., Mary-Jane, O'Connor)"
+
+last_name:
+  required: true
+  validation_type: "text_presence"
+  min_length: 2
+  max_length: 50
+  error_message: "Last Name is required and must be 2-50 characters"
+  field_category: "provider_identification"
+  extraction:
+    labels:
+      - "Last Name"
+      - "Family Name"
+      - "Surname"
+      - "Legal Last Name"
+    pattern: "[A-Za-z][A-Za-z\\s'-]{1,49}"
+    section: "provider_information"
+    max_distance: 40
+    confidence_threshold: 0.90
+    notes: "May include hyphens, apostrophes, and spaces (e.g., Smith-Jones, O'Brien)"
+
+date_of_birth:
+  required: true
+  validation_type: "date"
+  must_be_past: true
+  requires_masking: true
+  error_message: "Date of Birth is required and must be a valid past date"
+  field_category: "provider_identification"
+  extraction:
+    labels:
+      - "Date of Birth"
+      - "DOB"
+      - "Birth Date"
+      - "Date Of Birth"
+    pattern: "\\d{1,2}/\\d{1,2}/\\d{4}|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}-\\d{1,2}-\\d{4}"
+    section: "provider_information"
+    max_distance: 50
+    confidence_threshold: 0.95
+    requires_masking: true
+    date_formats:
+      - "%m/%d/%Y"  # 01/15/1985
+      - "%Y-%m-%d"  # 1985-01-15
+      - "%m-%d-%Y"  # 01-15-1985
+    notes: "PHI field - must be masked in logs. Validate age is reasonable (18-100 years)"
+
+gender:
+  required: true
+  validation_type: "enum"
+  allowed_values: ["Male", "Female", "M", "F"]
+  field_category: "provider_identification"
+  extraction:
+    labels: ["Gender", "Sex"]
+    pattern: "Male|Female|M|F"
+    section: "provider_information"
+    max_distance: 20
+
+practice_location_address:
+  required: true
+  validation_type: "text_presence"
+  min_length: 5
+  max_length: 200
+  error_message: "Practice Location Address is required and must be 5-200 characters"
+  field_category: "practice_location"
+  extraction:
+    labels:
+      - "Address"
+      - "Street Address"
+      - "Location Address"
+      - "Practice Address"
+      - "Physical Address"
+    pattern: ".{5,200}"
+    section: "practice_locations"
+    max_distance: 120
+    confidence_threshold: 0.85
+    notes: "Full street address including number, street name, and optional suite/unit"
+
+practice_location_city:
+  required: true
+  validation_type: "text_presence"
+  min_length: 2
+  max_length: 50
+  error_message: "Practice Location City is required and must be 2-50 characters"
+  field_category: "practice_location"
+  extraction:
+    labels:
+      - "City"
+      - "Practice City"
+      - "Location City"
+    pattern: "[A-Za-z][A-Za-z \\-']{1,49}"
+    section: "practice_locations"
+    max_distance: 40
+    confidence_threshold: 0.90
+    notes: "City name - may include spaces, hyphens, or apostrophes"
+
+practice_location_state:
+  required: true
+  validation_type: "enum"
+  allowed_values: ["AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "DC"]
+  error_message: "Practice Location State must be a valid 2-letter US state code"
+  field_category: "practice_location"
+  extraction:
+    labels:
+      - "State"
+      - "ST"
+      - "Practice State"
+    pattern: "[A-Z]{2}"
+    section: "practice_locations"
+    max_distance: 30
+    confidence_threshold: 0.95
+    notes: "2-letter US state abbreviation (e.g., CA, NY, TX)"
+
+practice_location_zip:
+  required: true
+  validation_type: "format"
+  format_regex: "^\\d{5}(-\\d{4})?$"
+  error_message: "Practice Location ZIP must be in format XXXXX or XXXXX-XXXX"
+  field_category: "practice_location"
+  extraction:
+    labels:
+      - "Zip"
+      - "ZIP"
+      - "Zip Code"
+      - "Postal Code"
+      - "ZIP Code"
+    pattern: "\\d{5}(-\\d{4})?"
+    section: "practice_locations"
+    max_distance: 40
+    confidence_threshold: 0.95
+    notes: "5-digit or 9-digit ZIP code (XXXXX or XXXXX-XXXX)"
+
+practice_location_phone:
+  required: true
+  validation_type: "format"
+  format_regex: "^\\d{3}-\\d{3}-\\d{4}$|^\\(\\d{3}\\) \\d{3}-\\d{4}$|^\\d{10}$"
+  error_message: "Practice Location Phone must be a valid US phone number"
+  field_category: "practice_location"
+  extraction:
+    labels:
+      - "Phone"
+      - "Telephone"
+      - "Phone Number"
+      - "Tel"
+      - "Contact Phone"
+    pattern: "\\d{3}-\\d{3}-\\d{4}|\\(\\d{3}\\) \\d{3}-\\d{4}|\\d{10}"
+    section: "practice_locations"
+    max_distance: 50
+    confidence_threshold: 0.90
+    notes: "US phone number - accepts XXX-XXX-XXXX, (XXX) XXX-XXXX, or XXXXXXXXXX"
+
+practice_location_email:
+  required: false
+  validation_type: "format"
+  format_regex: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"
+  error_message: "Practice Location Email must be a valid email address format"
+  field_category: "practice_location"
+  extraction:
+    labels:
+      - "Email"
+      - "Email Address"
+      - "E-mail"
+      - "Contact Email"
+      - "Practice Email"
+    pattern: "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+    section: "practice_locations"
+    max_distance: 60
+    confidence_threshold: 0.95
+    notes: "Optional field - standard email format (user@domain.com)"
+
+professional_license_number:
+  required: true
+  validation_type: "text_presence"
+  min_length: 5
+  max_length: 20
+  error_message: "Professional License Number is required and must be 5-20 characters"
+  field_category: "licensure"
+  extraction:
+    labels:
+      - "License Number"
+      - "License #"
+      - "Professional License Number"
+      - "State License Number"
+      - "License No"
+    pattern: "[A-Z0-9]{5,20}"
+    section: "licensure"
+    max_distance: 60
+    confidence_threshold: 0.90
+    notes: "Alphanumeric license number format varies by state. May include hyphens or special characters."
+
+
+# ============================================================================
+# EXTRACTION CONFIGURATION METADATA
+# ============================================================================
+
+_extraction_config:
+  confidence_levels:
+    high: 0.90  # >= 0.90 = High confidence
+    medium: 0.70  # 0.70-0.89 = Medium confidence
+    low: 0.00  # < 0.70 = Low confidence
+
+  extraction_methods:
+    native_pdf: "Text extracted from native PDF using pdfplumber"
+    ocr: "Text extracted via OCR (scanned document)"
+    pattern_match: "Extracted using regex pattern matching"
+    label_proximity: "Extracted based on label proximity"
+    ai_assisted: "AI-assisted extraction for complex fields"
+
+  sections:
+    provider_information: "Personal and identifying information"
+    practice_locations: "Practice location details (most error-prone)"
+    licensure: "Professional licenses and certifications"
+    education: "Educational background"
+    training: "Training and experience"
+    disclosure: "Disclosure questions"
+
+  notes: |
+    This configuration drives both validation and extraction.
+    - Extraction hints guide the field_extractor.py module
+    - Validation rules guide the field_validators.py module
+    - Both work together to provide comprehensive field processing

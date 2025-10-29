@@ -1,0 +1,17 @@
+# CAQH POC - Minimal Requirements for Streamlit Cloud
+# No API keys needed - uses pattern matching extraction
+
+# Web app framework
+streamlit==1.28.1
+
+# PDF reading (native text extraction)
+pypdf2==3.0.1
+pdfplumber==0.10.3
+
+# Configuration and data models
+pyyaml==6.0.1
+pydantic==2.5.0
+
+# Date/time utilities
+python-dateutil==2.8.2
+pytz==2023.3
