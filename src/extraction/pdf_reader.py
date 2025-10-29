@@ -42,8 +42,8 @@ def read_pdf_text(pdf_path: str) -> str:
     """
     Extract text from PDF using best available method.
 
-    Tries pdfplumber first (best for native PDFs), falls back to OCR
-    for scanned documents.
+    Tries pdfplumber first (best for native PDFs), falls back to PyPDF2.
+    Uses OCR only if absolutely no text can be extracted.
 
     Args:
         pdf_path: Path to the PDF file
@@ -63,32 +63,44 @@ def read_pdf_text(pdf_path: str) -> str:
     if not pdf_file.is_file():
         raise PDFReadError(f"Path is not a file: {pdf_path}")
 
+    # Strategy 1: Try pdfplumber first (best for native PDFs)
     try:
-        # Strategy 1: Try pdfplumber first (best for native PDFs)
         text = _extract_with_pdfplumber(pdf_path)
 
-        # Check if extraction yielded meaningful text
-        if is_scanned_pdf(text):
-            # PDF is scanned - try OCR
-            if OCR_AVAILABLE:
-                text = extract_with_ocr(pdf_path)
-            else:
-                raise PDFReadError(
-                    "PDF appears to be scanned but Tesseract OCR is not available. "
-                    "Install tesseract-ocr to process scanned documents."
-                )
-
-        return text
-
-    except Exception as e:
-        # Try PyPDF2 as last resort
-        try:
-            text = _extract_with_pypdf2(pdf_path)
-            if is_scanned_pdf(text):
-                raise PDFReadError(f"PDF is scanned and OCR failed: {e}")
+        # If we got ANY text, use it (even if minimal)
+        if text and len(text.strip()) > 0:
             return text
-        except Exception as e2:
-            raise PDFReadError(f"Failed to read PDF: {e}. PyPDF2 also failed: {e2}")
+
+    except Exception as pdfplumber_error:
+        # pdfplumber failed, will try PyPDF2 below
+        pass
+
+    # Strategy 2: Try PyPDF2 as fallback
+    try:
+        text = _extract_with_pypdf2(pdf_path)
+
+        # If we got ANY text, use it
+        if text and len(text.strip()) > 0:
+            return text
+
+    except Exception as pypdf2_error:
+        # PyPDF2 also failed
+        pass
+
+    # Strategy 3: Try OCR only if both native methods failed to get ANY text
+    if OCR_AVAILABLE:
+        try:
+            text = extract_with_ocr(pdf_path)
+            if text and len(text.strip()) > 0:
+                return text
+        except Exception as ocr_error:
+            pass
+
+    # If we get here, all methods failed
+    raise PDFReadError(
+        "Failed to extract text from PDF. The PDF may be corrupted, encrypted, "
+        "or is a scanned image without OCR capability."
+    )
 
 
 def _extract_with_pdfplumber(pdf_path: str) -> str:
