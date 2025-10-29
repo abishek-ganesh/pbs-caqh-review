@@ -13,15 +13,19 @@ from pathlib import Path
 from typing import Optional, Tuple
 import pdfplumber
 import PyPDF2
-from PIL import Image
-import pdf2image
 
-# Optional: pytesseract for OCR (requires tesseract installed)
+# Optional: OCR dependencies (not needed for native PDFs)
 try:
+    from PIL import Image
+    import pdf2image
     import pytesseract
-    TESSERACT_AVAILABLE = True
+    OCR_AVAILABLE = True
 except ImportError:
-    TESSERACT_AVAILABLE = False
+    OCR_AVAILABLE = False
+    # Dummy classes to prevent NameError if OCR not available
+    Image = None
+    pdf2image = None
+    pytesseract = None
 
 
 class PDFReadError(Exception):
@@ -66,7 +70,7 @@ def read_pdf_text(pdf_path: str) -> str:
         # Check if extraction yielded meaningful text
         if is_scanned_pdf(text):
             # PDF is scanned - try OCR
-            if TESSERACT_AVAILABLE:
+            if OCR_AVAILABLE:
                 text = extract_with_ocr(pdf_path)
             else:
                 raise PDFReadError(
@@ -245,7 +249,7 @@ def extract_with_ocr(pdf_path: str) -> str:
     Raises:
         PDFReadError: If OCR fails or tesseract not available
     """
-    if not TESSERACT_AVAILABLE:
+    if not OCR_AVAILABLE:
         raise PDFReadError(
             "Tesseract OCR not available. Install pytesseract and tesseract-ocr."
         )
