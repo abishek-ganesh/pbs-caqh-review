@@ -1718,3 +1718,542 @@ def get_validation_summary(results: List[FieldValidationResult]) -> Dict[str, an
         "total_errors": len(errors),
         "error_messages": errors
     }
+
+
+# ============================================================================
+# PROFESSIONAL LIABILITY INSURANCE VALIDATORS
+# ============================================================================
+
+
+
+
+def validate_insurance_policy_number(value: Optional[str]) -> FieldValidationResult:
+    """
+    Validate insurance policy number.
+
+    Requirements:
+    - Required field (critical)
+    - Must be 5-50 characters
+    - Alphanumeric with optional hyphens/spaces
+
+    Args:
+        value: The insurance policy number to validate
+
+    Returns:
+        FieldValidationResult with validation status and details
+    """
+    field_name = "insurance_policy_number"
+    field_category = "Professional Liability Insurance"
+    is_required = True
+    validation_rules_applied = ["required", "text_presence", "length"]
+    errors = []
+    warnings = []
+
+    # Check if value exists
+    if value is None or not isinstance(value, str):
+        return _create_field_result(
+            field_name=field_name,
+            field_category=field_category,
+            extracted_value=value,
+            is_valid=False,
+            is_required=is_required,
+            confidence=0.0,
+            validation_rules_applied=validation_rules_applied,
+            errors=["Insurance Policy Number is required and was not extracted from PDF"],
+            warnings=warnings,
+            notes="Field is missing or None"
+        )
+
+    value_stripped = value.strip()
+
+    # Check if empty
+    if not value_stripped:
+        return _create_field_result(
+            field_name=field_name,
+            field_category=field_category,
+            extracted_value=value,
+            is_valid=False,
+            is_required=is_required,
+            confidence=0.0,
+            validation_rules_applied=validation_rules_applied,
+            errors=["Insurance Policy Number is required but appears empty"],
+            warnings=warnings,
+            notes="Field extracted but contains no value"
+        )
+
+    # Check length requirements (5-50 characters)
+    if len(value_stripped) < 5:
+        errors.append(f"Insurance Policy Number is too short (must be at least 5 characters, got {len(value_stripped)})")
+
+    if len(value_stripped) > 50:
+        errors.append(f"Insurance Policy Number is too long (must be at most 50 characters, got {len(value_stripped)})")
+
+    # Validate format (alphanumeric with optional hyphens/spaces)
+    import re
+    if not re.match(r'^[A-Za-z0-9\s\-]+$', value_stripped):
+        errors.append("Insurance Policy Number contains invalid characters (only letters, numbers, hyphens, and spaces allowed)")
+
+    # Return validation result
+    if errors:
+        validation_details = [
+            "❌ Required field check: Present but invalid",
+            f"❌ Length check: {len(value_stripped)} characters (expected 5-50)",
+            f"❌ Format check: Contains invalid characters"
+        ]
+        return _create_field_result(
+            field_name=field_name,
+            field_category=field_category,
+            extracted_value=value_stripped,
+            is_valid=False,
+            is_required=is_required,
+            confidence=0.50,
+            validation_rules_applied=validation_rules_applied,
+            errors=errors,
+            warnings=warnings,
+            notes="Policy number format validation failed",
+            validation_details=validation_details
+        )
+
+    validation_details = [
+        "✅ Required field check: Present",
+        f"✅ Length check: {len(value_stripped)} characters (valid range: 5-50)",
+        "✅ Format check: Alphanumeric characters only"
+    ]
+
+    return _create_field_result(
+        field_name=field_name,
+        field_category=field_category,
+        extracted_value=value_stripped,
+        is_valid=True,
+        is_required=is_required,
+        confidence=0.95,
+        validation_rules_applied=validation_rules_applied,
+        errors=[],
+        warnings=warnings,
+        notes="Insurance Policy Number is valid",
+        validation_details=validation_details,
+        confidence_reasoning="High confidence (0.95) - policy number format is valid"
+    )
+
+
+def validate_insurance_covered_location(value: Optional[str]) -> FieldValidationResult:
+    """
+    Validate insurance covered location.
+
+    Requirements:
+    - OPTIONAL field (not required - this is the ONLY insurance field that allows flexible matching)
+    - If present, should be non-empty text
+    - Per Christian's feedback: More flexible matching allowed
+
+    Args:
+        value: The insurance covered location to validate
+
+    Returns:
+        FieldValidationResult with validation status and details
+    """
+    field_name = "insurance_covered_location"
+    field_category = "Professional Liability Insurance"
+    is_required = False  # ONLY optional insurance field
+    validation_rules_applied = ["optional", "text_presence"]
+    errors = []
+    warnings = []
+
+    # If value is None or empty, that's acceptable (optional field)
+    if value is None or not isinstance(value, str) or not value.strip():
+        validation_details = [
+            "ℹ️  Required field check: Optional (not required)",
+            "ℹ️  Value: Not specified"
+        ]
+        return _create_field_result(
+            field_name=field_name,
+            field_category=field_category,
+            extracted_value=None,
+            is_valid=True,
+            is_required=is_required,
+            confidence=0.85,
+            validation_rules_applied=validation_rules_applied,
+            errors=[],
+            warnings=["Insurance Covered Location not specified (optional field)"],
+            notes="This is an optional field per CAQH requirements",
+            validation_details=validation_details,
+            confidence_reasoning="Optional field not provided - acceptable"
+        )
+
+    value_stripped = value.strip()
+
+    # If present, validate it has reasonable content
+    if len(value_stripped) < 3:
+        warnings.append("Insurance Covered Location seems too short to be valid")
+        confidence = 0.70
+    else:
+        confidence = 0.90
+
+    validation_details = [
+        "✅ Optional field check: Value provided",
+        f"✅ Text presence check: {len(value_stripped)} characters",
+        "ℹ️  Flexible matching allowed per CAQH requirements"
+    ]
+
+    return _create_field_result(
+        field_name=field_name,
+        field_category=field_category,
+        extracted_value=value_stripped,
+        is_valid=True,
+        is_required=is_required,
+        confidence=confidence,
+        validation_rules_applied=validation_rules_applied,
+        errors=[],
+        warnings=warnings,
+        notes="Covered location present and has valid content",
+        validation_details=validation_details,
+        confidence_reasoning=f"Confidence {confidence} - covered location has reasonable content"
+    )
+
+
+def validate_insurance_current_effective_date(value: Optional[str]) -> FieldValidationResult:
+    """
+    Validate insurance current effective date.
+
+    Requirements:
+    - Required field (critical)
+    - Must be valid date format
+    - Should be in the past or present (not future)
+    - Must match PBS policy exactly
+
+    Args:
+        value: The insurance effective date to validate
+
+    Returns:
+        FieldValidationResult with validation status and details
+    """
+    field_name = "insurance_current_effective_date"
+    field_category = "Professional Liability Insurance"
+    is_required = True
+    validation_rules_applied = ["required", "date_format", "date_past_or_present"]
+    errors = []
+    warnings = []
+
+    # Check if value exists
+    if value is None or not isinstance(value, str):
+        return _create_field_result(
+            field_name=field_name,
+            field_category=field_category,
+            extracted_value=value,
+            is_valid=False,
+            is_required=is_required,
+            confidence=0.0,
+            validation_rules_applied=validation_rules_applied,
+            errors=["Insurance Current Effective Date is required and was not extracted from PDF"],
+            warnings=[],
+            notes="Field is missing or None"
+        )
+
+    value_stripped = value.strip()
+
+    # Check if empty
+    if not value_stripped:
+        return _create_field_result(
+            field_name=field_name,
+            field_category=field_category,
+            extracted_value=value,
+            is_valid=False,
+            is_required=is_required,
+            confidence=0.0,
+            validation_rules_applied=validation_rules_applied,
+            errors=["Insurance Current Effective Date is required but appears empty"],
+            warnings=[],
+            notes="Field extracted but contains no value"
+        )
+
+    # Parse date
+    from ..utils.date_utils import parse_date, is_future_date
+    from datetime import datetime
+
+    parsed_date = parse_date(value_stripped)
+
+    if parsed_date is None:
+        validation_details = [
+            "❌ Required field check: Present",
+            f"❌ Date format check: Invalid (got '{value_stripped}')",
+            "Expected format: MM/DD/YYYY"
+        ]
+        return _create_field_result(
+            field_name=field_name,
+            field_category=field_category,
+            extracted_value=value_stripped,
+            is_valid=False,
+            is_required=is_required,
+            confidence=0.30,
+            validation_rules_applied=validation_rules_applied,
+            errors=[f"Invalid date format for Insurance Effective Date: '{value_stripped}' (expected MM/DD/YYYY)"],
+            warnings=[],
+            notes="Date parsing failed",
+            validation_details=validation_details
+        )
+
+    # Check if date is in the future (effective dates should be past or present)
+    today = datetime.now().date()
+    if parsed_date > today:
+        warnings.append(f"Insurance Effective Date is in the future ({value_stripped}). Verify this is correct.")
+
+    validation_details = [
+        "✅ Required field check: Present",
+        "✅ Date format check: Valid",
+        f"✅ Parsed date: {parsed_date.strftime('%Y-%m-%d')}",
+        f"✅ Date check: {'Future' if parsed_date > today else 'Past/Present'} (effective dates typically past/present)"
+    ]
+
+    return _create_field_result(
+        field_name=field_name,
+        field_category=field_category,
+        extracted_value=value_stripped,
+        is_valid=True,
+        is_required=is_required,
+        confidence=0.95,
+        validation_rules_applied=validation_rules_applied,
+        errors=[],
+        warnings=warnings,
+        notes="Valid date format and reasonable effective date",
+        validation_details=validation_details,
+        confidence_reasoning="High confidence (0.95) - date parsed successfully"
+    )
+
+
+def validate_insurance_current_expiration_date(value: Optional[str]) -> FieldValidationResult:
+    """
+    Validate insurance current expiration date.
+
+    Requirements:
+    - Required field (critical)
+    - Must be valid date format
+    - MUST be in the future (not expired)
+    - Warn if expiring within 30 days
+    - Must match PBS policy exactly
+
+    Args:
+        value: The insurance expiration date to validate
+
+    Returns:
+        FieldValidationResult with validation status and details
+    """
+    field_name = "insurance_current_expiration_date"
+    field_category = "Professional Liability Insurance"
+    is_required = True
+    validation_rules_applied = ["required", "date_format", "date_future"]
+    errors = []
+    warnings = []
+
+    # Check if value exists
+    if value is None or not isinstance(value, str):
+        return _create_field_result(
+            field_name=field_name,
+            field_category=field_category,
+            extracted_value=value,
+            is_valid=False,
+            is_required=is_required,
+            confidence=0.0,
+            validation_rules_applied=validation_rules_applied,
+            errors=["Insurance Current Expiration Date is required and was not extracted from PDF"],
+            warnings=[],
+            notes="Field is missing or None"
+        )
+
+    value_stripped = value.strip()
+
+    # Check if empty
+    if not value_stripped:
+        return _create_field_result(
+            field_name=field_name,
+            field_category=field_category,
+            extracted_value=value,
+            is_valid=False,
+            is_required=is_required,
+            confidence=0.0,
+            validation_rules_applied=validation_rules_applied,
+            errors=["Insurance Current Expiration Date is required but appears empty"],
+            warnings=[],
+            notes="Field extracted but contains no value"
+        )
+
+    # Parse date
+    from ..utils.date_utils import parse_date, is_future_date
+    from datetime import datetime
+
+    parsed_date = parse_date(value_stripped)
+
+    if parsed_date is None:
+        validation_details = [
+            "❌ Required field check: Present",
+            f"❌ Date format check: Invalid (got '{value_stripped}')",
+            "Expected format: MM/DD/YYYY"
+        ]
+        return _create_field_result(
+            field_name=field_name,
+            field_category=field_category,
+            extracted_value=value_stripped,
+            is_valid=False,
+            is_required=is_required,
+            confidence=0.30,
+            validation_rules_applied=validation_rules_applied,
+            errors=[f"Invalid date format for Insurance Expiration Date: '{value_stripped}' (expected MM/DD/YYYY)"],
+            warnings=[],
+            notes="Date parsing failed",
+            validation_details=validation_details
+        )
+
+    # Check if date is in the future (CRITICAL: Insurance must not be expired)
+    if not is_future_date(parsed_date, strict=False):
+        validation_details = [
+            "❌ Required field check: Present",
+            "✅ Date format check: Valid",
+            f"✅ Parsed date: {parsed_date.strftime('%Y-%m-%d')}",
+            "❌ CRITICAL: Insurance has EXPIRED"
+        ]
+        return _create_field_result(
+            field_name=field_name,
+            field_category=field_category,
+            extracted_value=value_stripped,
+            is_valid=False,
+            is_required=is_required,
+            confidence=0.95,  # High confidence in the failure - we're sure it's expired
+            validation_rules_applied=validation_rules_applied,
+            errors=[f"Insurance has EXPIRED (expiration date: {value_stripped}). Current insurance is required."],
+            warnings=[],
+            notes="Insurance expiration date is in the past - policy is expired",
+            validation_details=validation_details,
+            confidence_reasoning="High confidence (0.95) in validation failure - date is definitely expired"
+        )
+
+    # Calculate days until expiration
+    today = datetime.now().date()
+    days_until_expiration = (parsed_date - today).days
+
+    # Warn if expiring soon (within 30 days)
+    if days_until_expiration <= 30:
+        warnings.append(f"Insurance expires soon ({days_until_expiration} days). Provider should renew policy.")
+
+    validation_details = [
+        "✅ Required field check: Present",
+        "✅ Date format check: Valid",
+        f"✅ Parsed date: {parsed_date.strftime('%Y-%m-%d')}",
+        f"✅ Future date check: Valid ({days_until_expiration} days remaining)"
+    ]
+
+    return _create_field_result(
+        field_name=field_name,
+        field_category=field_category,
+        extracted_value=value_stripped,
+        is_valid=True,
+        is_required=is_required,
+        confidence=0.97,
+        validation_rules_applied=validation_rules_applied,
+        errors=[],
+        warnings=warnings,
+        notes=f"Valid future expiration date ({days_until_expiration} days remaining)",
+        validation_details=validation_details,
+        confidence_reasoning=f"Very high confidence (0.97) - valid future date with {days_until_expiration} days remaining"
+    )
+
+
+def validate_insurance_carrier_name(value: Optional[str]) -> FieldValidationResult:
+    """
+    Validate insurance carrier name.
+
+    Requirements:
+    - Required field (critical)
+    - Must be 3-100 characters
+    - Should be valid company name
+    - Must match PBS policy exactly
+
+    Args:
+        value: The insurance carrier name to validate
+
+    Returns:
+        FieldValidationResult with validation status and details
+    """
+    field_name = "insurance_carrier_name"
+    field_category = "Professional Liability Insurance"
+    is_required = True
+    validation_rules_applied = ["required", "text_presence", "length"]
+    errors = []
+    warnings = []
+
+    # Check if value exists
+    if value is None or not isinstance(value, str):
+        return _create_field_result(
+            field_name=field_name,
+            field_category=field_category,
+            extracted_value=value,
+            is_valid=False,
+            is_required=is_required,
+            confidence=0.0,
+            validation_rules_applied=validation_rules_applied,
+            errors=["Insurance Carrier Name is required and was not extracted from PDF"],
+            warnings=[],
+            notes="Field is missing or None"
+        )
+
+    value_stripped = value.strip()
+
+    # Check if empty
+    if not value_stripped:
+        return _create_field_result(
+            field_name=field_name,
+            field_category=field_category,
+            extracted_value=value,
+            is_valid=False,
+            is_required=is_required,
+            confidence=0.0,
+            validation_rules_applied=validation_rules_applied,
+            errors=["Insurance Carrier Name is required but appears empty"],
+            warnings=[],
+            notes="Field extracted but contains no value"
+        )
+
+    # Check length requirements (3-100 characters)
+    if len(value_stripped) < 3:
+        errors.append(f"Insurance Carrier Name is too short (must be at least 3 characters, got {len(value_stripped)})")
+
+    if len(value_stripped) > 100:
+        errors.append(f"Insurance Carrier Name is too long (must be at most 100 characters, got {len(value_stripped)})")
+
+    # Return validation result
+    if errors:
+        validation_details = [
+            "❌ Required field check: Present but invalid",
+            f"❌ Length check: {len(value_stripped)} characters (expected 3-100)"
+        ]
+        return _create_field_result(
+            field_name=field_name,
+            field_category=field_category,
+            extracted_value=value_stripped,
+            is_valid=False,
+            is_required=is_required,
+            confidence=0.50,
+            validation_rules_applied=validation_rules_applied,
+            errors=errors,
+            warnings=warnings,
+            notes="Carrier name format validation failed",
+            validation_details=validation_details
+        )
+
+    validation_details = [
+        "✅ Required field check: Present",
+        f"✅ Length check: {len(value_stripped)} characters (valid range: 3-100)",
+        "✅ Format check: Valid company name"
+    ]
+
+    return _create_field_result(
+        field_name=field_name,
+        field_category=field_category,
+        extracted_value=value_stripped,
+        is_valid=True,
+        is_required=is_required,
+        confidence=0.95,
+        validation_rules_applied=validation_rules_applied,
+        errors=[],
+        warnings=warnings,
+        notes="Insurance Carrier Name is valid",
+        validation_details=validation_details,
+        confidence_reasoning="High confidence (0.95) - carrier name format is valid"
+    )

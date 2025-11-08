@@ -47,10 +47,12 @@ medicaid_id:
       - "Medicaid Provider ID"
     pattern: "\\d{8,12}"  # 8-12 digit number
     pattern_required: true  # MUST match pattern - no line-based fallback for text values
-    section: "provider_information"
+    # BUG #3 FIX: Must extract from Professional Identification Numbers section ONLY
+    # Do NOT extract from Practice Locations > Group Medicaid Number
+    section: "professional_identification_numbers"
     max_distance: 50
     confidence_threshold: 0.85
-    notes: "Medicaid ID format varies by state but typically 8-12 digits"
+    notes: "Medicaid ID format varies by state but typically 8-12 digits. Individual Medicaid ID must be in Professional Identification Numbers section, NOT Practice Locations (Group Medicaid)."
 
 
 ssn:
@@ -70,12 +72,13 @@ ssn:
       - "SSN"
       - "SS#"
       - "Social Security #"
+      - "Social Number"  # BUG #4 FIX: Handle OCR split labels (e.g., "Social  Number:\nSecurity  137-96-6532")
     pattern: "\\d{3}-\\d{2}-\\d{4}|\\d{9}"
     section: "provider_information"
     max_distance: 150
     confidence_threshold: 0.95  # High confidence required for SSN
     requires_masking: true
-    notes: "SSN is PHI - must be handled securely and masked in logs"
+    notes: "SSN is PHI - must be handled securely and masked in logs. Label 'Social Number' handles split OCR cases."
 
 
 individual_npi:
@@ -390,6 +393,195 @@ professional_license_number:
 
 
 # ============================================================================
+# PROFESSIONAL LIABILITY INSURANCE FIELDS (11 fields total - Week 4/5 priority)
+# ============================================================================
+
+# Priority 1: Critical insurance fields (5 fields - Week 4)
+
+insurance_policy_number:
+  # Validation
+  required: true
+  validation_type: "text_presence"
+  min_length: 5
+  max_length: 50
+  error_message: "Insurance Policy Number is required and must be 5-50 characters"
+  critical: true
+  field_category: "professional_liability_insurance"
+
+  # Extraction
+  extraction:
+    labels:
+      - "Policy Number"
+      - "Policy #"
+      - "Insurance Policy Number"
+      - "Policy No"
+      - "Liability Policy Number"
+    pattern: "[A-Z0-9\\-]{5,50}"
+    section: "professional_liability_insurance"
+    max_distance: 80
+    confidence_threshold: 0.90
+    notes: |
+      Professional Liability Insurance Policy Number from the item in the Credentialing site's
+      Liability Insurance library with the greatest [Expiration Date].
+      Must match PBS policy exactly.
+
+insurance_covered_location:
+  # Validation
+  required: false  # Not required per CAQH Cheat Sheet
+  validation_type: "text_presence"
+  min_length: 2
+  max_length: 200
+  error_message: "Insurance Covered Location should be 2-200 characters if provided"
+  critical: false
+  field_category: "professional_liability_insurance"
+
+  # Extraction
+  extraction:
+    labels:
+      - "Covered Practice Location"
+      - "Covered Location"
+      - "Practice Location"
+      - "Location Covered"
+    pattern: ".{2,200}"
+    section: "professional_liability_insurance"
+    max_distance: 150
+    confidence_threshold: 0.85
+    notes: |
+      Covered Practice Location - flexible matching allowed.
+      This is the ONLY insurance field that doesn't require exact matching.
+      From [Covered Location] in CAQH User Data list.
+
+insurance_current_effective_date:
+  # Validation
+  required: true
+  validation_type: "date"
+  must_be_past_or_present: true
+  error_message: "Insurance Current Effective Date is required and must be a valid date (past or present)"
+  critical: true
+  field_category: "professional_liability_insurance"
+
+  # Extraction
+  extraction:
+    labels:
+      - "Current Effective Date"
+      - "Effective Date"
+      - "Coverage Effective"
+      - "Policy Effective Date"
+      - "Eff Date"
+    pattern: "\\d{1,2}/\\d{1,2}/\\d{4}|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}-\\d{1,2}-\\d{4}"
+    section: "professional_liability_insurance"
+    max_distance: 80
+    confidence_threshold: 0.90
+    date_formats:
+      - "%m/%d/%Y"  # 01/15/2024
+      - "%Y-%m-%d"  # 2024-01-15
+      - "%m-%d-%Y"  # 01-15-2024
+    notes: |
+      Current Effective Date from the item in the Credentialing site's Liability Insurance library
+      with the greatest [Expiration Date]. Must match PBS policy exactly.
+      Should be past or present date (when coverage started).
+
+insurance_current_expiration_date:
+  # Validation
+  required: true
+  validation_type: "date"
+  must_be_future: true
+  warn_if_expires_within_days: 30
+  error_message: "Insurance Current Expiration Date is required and must be a future date"
+  critical: true
+  field_category: "professional_liability_insurance"
+
+  # Extraction
+  extraction:
+    labels:
+      - "Current Expiration Date"
+      - "Expiration Date"
+      - "Coverage Expiration"
+      - "Policy Expiration Date"
+      - "Exp Date"
+      - "Expires"
+    pattern: "\\d{1,2}/\\d{1,2}/\\d{4}|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}-\\d{1,2}-\\d{4}"
+    section: "professional_liability_insurance"
+    max_distance: 80
+    confidence_threshold: 0.90
+    date_formats:
+      - "%m/%d/%Y"  # 12/31/2025
+      - "%Y-%m-%d"  # 2025-12-31
+      - "%m-%d-%Y"  # 12-31-2025
+    notes: |
+      Current Expiration Date from the item in the Credentialing site's Liability Insurance library
+      with the greatest [Expiration Date]. Must match PBS policy exactly.
+      Should be future date (coverage must be active). Warn if expires within 30 days.
+
+insurance_carrier_name:
+  # Validation
+  required: true
+  validation_type: "text_presence"
+  min_length: 3
+  max_length: 100
+  error_message: "Insurance Carrier Name is required and must be 3-100 characters"
+  critical: true
+  field_category: "professional_liability_insurance"
+
+  # Extraction
+  extraction:
+    labels:
+      - "Carrier/Self Insured Name"
+      - "Carrier Name"
+      - "Insurance Carrier"
+      - "Carrier"
+      - "Insurer Name"
+      - "Insurance Company"
+    pattern: ".{3,100}"
+    section: "professional_liability_insurance"
+    max_distance: 100
+    confidence_threshold: 0.90
+    notes: |
+      Carrier/Self Insured Name from the item in the Credentialing site's Liability Insurance library
+      with the furthest away expiration. Must match PBS policy exactly.
+
+
+# Priority 2: Insurance address fields (6 fields - Week 5)
+# To be implemented after Priority 1 fields are tested
+
+# insurance_address_street_1:
+#   required: true
+#   validation_type: "text_presence"
+#   field_category: "professional_liability_insurance"
+#   # Implementation pending Week 5
+
+# insurance_address_street_2:
+#   required: false
+#   validation_type: "text_presence"
+#   field_category: "professional_liability_insurance"
+#   # Implementation pending Week 5
+
+# insurance_address_city:
+#   required: true
+#   validation_type: "text_presence"
+#   field_category: "professional_liability_insurance"
+#   # Implementation pending Week 5
+
+# insurance_address_state:
+#   required: false
+#   validation_type: "enum"
+#   field_category: "professional_liability_insurance"
+#   # Implementation pending Week 5
+
+# insurance_address_country:
+#   required: false
+#   validation_type: "text_presence"
+#   field_category: "professional_liability_insurance"
+#   # Implementation pending Week 5
+
+# insurance_address_zip:
+#   required: false
+#   validation_type: "format"
+#   field_category: "professional_liability_insurance"
+#   # Implementation pending Week 5
+
+
+# ============================================================================
 # EXTRACTION CONFIGURATION METADATA
 # ============================================================================
 
@@ -409,7 +601,9 @@ _extraction_config:
   sections:
     provider_information: "Personal and identifying information"
     practice_locations: "Practice location details (most error-prone)"
+    professional_identification_numbers: "Professional identification numbers (NPI, Medicaid, etc.)"
     licensure: "Professional licenses and certifications"
+    professional_liability_insurance: "Professional liability insurance coverage details"
     education: "Educational background"
     training: "Training and experience"
     disclosure: "Disclosure questions"

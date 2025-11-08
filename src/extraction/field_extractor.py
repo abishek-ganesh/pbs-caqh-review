@@ -71,113 +71,9 @@ def extract_field(
     """
     extraction_config = field_config.get("extraction", {})
 
-    # === SPECIAL HANDLING: Practice Location Name ===
-    # For practice_location_name, try PBS extractor first
-    # If it finds a PBS organization with good confidence, use it
-    # Otherwise, fall back to regular extraction for non-PBS organizations
-    if field_name == "practice_location_name":
-        try:
-            from src.extraction.pbs_name_extractor import extract_pbs_practice_name
-            pbs_name, pbs_confidence = extract_pbs_practice_name(text)
-
-            if pbs_name and pbs_confidence >= 0.80:
-                # PBS name found with good confidence - return immediately
-                return FieldExtractionResult(
-                    field_name=field_name,
-                    extracted_value=pbs_name,
-                    confidence=pbs_confidence,
-                    extraction_method="pbs_extractor",
-                    notes=f"PBS organization detected: {pbs_name}"
-                )
-            # PBS extractor didn't find PBS organization with high confidence
-            # Fall through to regular extraction for non-PBS organizations
-            # like "Neuro Dverse LLC" or other practice names
-        except ImportError:
-            # PBS extractor not available - continue with regular extraction
-            pass
-
-    if not extraction_config:
-        return FieldExtractionResult(
-            field_name=field_name,
-            extracted_value=None,
-            confidence=0.0,
-            extraction_method="no_config",
-            errors=[f"No extraction configuration found for {field_name}"]
-        )
-
-    labels = extraction_config.get("labels", [])
-    pattern = extraction_config.get("pattern", "")
-    max_distance = extraction_config.get("max_distance", 50)
-
-    if not labels:
-        return FieldExtractionResult(
-            field_name=field_name,
-            extracted_value=None,
-            confidence=0.0,
-            extraction_method="no_labels",
-            errors=[f"No extraction labels defined for {field_name}"]
-        )
-
-    # Try each label in order until one succeeds
-    for label in labels:
-        result = _extract_using_label(
-            text, field_name, label, pattern, max_distance, extraction_config
-        )
-
-        # If extraction succeeded (found value), return it
-        if result.extracted_value:
-            return result
-
-    # No label matched
-    return FieldExtractionResult(
-        field_name=field_name,
-        extracted_value=None,
-        confidence=0.0,
-        extraction_method="label_proximity",
-        errors=[f"Could not find any of the labels: {', '.join(labels)}"],
-        notes=f"Tried labels: {', '.join(labels)}"
-    )
-
-
-def _extract_using_label(
-    text: str,
-    field_name: str,
-    label: str,
-    pattern: str,
-    max_distance: int,
-    extraction_config: dict
-) -> FieldExtractionResult:
-    """
-    Extract field value using a specific label with bidirectional search.
-
-    Searches both BEFORE and AFTER the label to handle cases where
-    values appear before their labels (common with table/form extraction).
-
-    SECTION-AWARE: If extraction_config specifies a 'section', searches
-    within that section first before falling back to full document search.
-
-    Args:
-        text: PDF text content
-        field_name: Name of field
-        label: Label to search for (e.g., "Medicaid ID")
-        pattern: Regex pattern to extract value
-        max_distance: Max characters before/after label to search
-        extraction_config: Full extraction configuration
-
-    Returns:
-        FieldExtractionResult
-    """
-    # Build label search pattern (case-insensitive, flexible whitespace)
-    label_pattern = re.escape(label).replace(r"\ ", r"\s*")
-
-    # Add word boundary at start for short labels to avoid matching inside words
-    # e.g., "Name :" should not match "First Name :"
-    if len(label.split()[0]) <= 6:  # Short first word (like "Name", "Tax", "SSN")
-        label_pattern = r"(?<!\w)" + label_pattern  # Negative lookbehind for word char
-
-    label_pattern = label_pattern + r"\s*:?\s*"  # Optional colon, flexible whitespace
-
-    # SECTION-AWARE SEARCH: If section specified, search within section first
+    # === SECTION-AWARE FILTERING (BUG #2A FIX) ===
+    # Do section filtering FIRST, before any extraction attempts
+    # This prevents extracting from wrong sections (e.g., Billing Department vs Practice Locations)
     section_name = extraction_config.get("section")
     search_text = text
     section_offset = 0
@@ -215,6 +111,166 @@ def _extract_using_label(
                 search_text = text[section_start:section_end]
                 section_offset = section_start
                 break
+
+    # === SPECIAL HANDLING: Insurance Fields ===
+    # For insurance fields, extract all fields at once from the policy with furthest expiration date
+    # This is more efficient and accurate than extracting each field separately
+    if field_name.startswith("insurance_"):
+        try:
+            from .field_specific_extractors import extract_insurance_fields
+
+            # Extract all insurance fields at once (cached globally to avoid re-extraction)
+            # Use a cache to avoid extracting multiple times when processing multiple insurance fields
+            if not hasattr(extract_field, '_insurance_cache'):
+                extract_field._insurance_cache = {}
+
+            # Cache key is the text hash (to handle different PDFs)
+            import hashlib
+            text_hash = hashlib.md5(text.encode()).hexdigest()[:16]
+
+            if text_hash not in extract_field._insurance_cache:
+                # First insurance field request - extract all fields
+                extract_field._insurance_cache[text_hash] = extract_insurance_fields(text)
+
+            insurance_data = extract_field._insurance_cache[text_hash]
+            extracted_value = insurance_data.get(field_name)
+
+            # Calculate confidence based on whether value was found
+            if extracted_value:
+                confidence = 0.90  # High confidence for successful insurance extraction
+            else:
+                confidence = 0.0
+
+            return FieldExtractionResult(
+                field_name=field_name,
+                extracted_value=extracted_value,
+                confidence=confidence,
+                extraction_method="insurance_extractor",
+                notes=f"Extracted from policy with furthest expiration date" if extracted_value else "No insurance data found"
+            )
+        except Exception as e:
+            # Insurance extractor failed - return error
+            return FieldExtractionResult(
+                field_name=field_name,
+                extracted_value=None,
+                confidence=0.0,
+                extraction_method="insurance_extractor_failed",
+                errors=[f"Insurance extraction failed: {str(e)}"]
+            )
+
+    # === SPECIAL HANDLING: Practice Location Name ===
+    # For practice_location_name, use consolidated PBS extractor
+    if field_name == "practice_location_name":
+        try:
+            from src.extraction.pbs_name_extractor import extract_pbs_practice_name_complete
+            # Use the consolidated function with pattern_required from config
+            pattern_required = extraction_config.get("pattern_required", False)
+            pbs_name, pbs_confidence = extract_pbs_practice_name_complete(search_text, pattern_required)
+
+            if pbs_name and pbs_confidence >= 0.80:
+                # PBS name found with good confidence - return immediately
+                return FieldExtractionResult(
+                    field_name=field_name,
+                    extracted_value=pbs_name,
+                    confidence=pbs_confidence,
+                    extraction_method="pbs_extractor",
+                    notes=f"PBS organization detected: {pbs_name}" + (f" (in {section_name} section)" if section_name else "")
+                )
+            # Fall through to regular extraction for non-PBS organizations
+        except ImportError:
+            # PBS extractor not available - continue with regular extraction
+            pass
+
+    if not extraction_config:
+        return FieldExtractionResult(
+            field_name=field_name,
+            extracted_value=None,
+            confidence=0.0,
+            extraction_method="no_config",
+            errors=[f"No extraction configuration found for {field_name}"]
+        )
+
+    labels = extraction_config.get("labels", [])
+    pattern = extraction_config.get("pattern", "")
+    max_distance = extraction_config.get("max_distance", 50)
+
+    if not labels:
+        return FieldExtractionResult(
+            field_name=field_name,
+            extracted_value=None,
+            confidence=0.0,
+            extraction_method="no_labels",
+            errors=[f"No extraction labels defined for {field_name}"]
+        )
+
+    # Try each label in order until one succeeds
+    for label in labels:
+        result = _extract_using_label(
+            search_text, field_name, label, pattern, max_distance, extraction_config
+        )
+
+        # If extraction succeeded (found value), return it
+        if result.extracted_value:
+            return result
+
+    # No label matched
+    return FieldExtractionResult(
+        field_name=field_name,
+        extracted_value=None,
+        confidence=0.0,
+        extraction_method="label_proximity",
+        errors=[f"Could not find any of the labels: {', '.join(labels)}"],
+        notes=f"Tried labels: {', '.join(labels)}"
+    )
+
+
+def _extract_using_label(
+    text: str,
+    field_name: str,
+    label: str,
+    pattern: str,
+    max_distance: int,
+    extraction_config: dict
+) -> FieldExtractionResult:
+    """
+    Extract field value using a specific label with bidirectional search.
+
+    Simplified version using field-specific helper functions.
+
+    Args:
+        text: PDF text content
+        field_name: Name of field
+        label: Label to search for
+        pattern: Regex pattern to extract value
+        max_distance: Max characters before/after label to search
+        extraction_config: Full extraction configuration
+
+    Returns:
+        FieldExtractionResult
+    """
+    from src.extraction.field_specific_extractors import (
+        extract_practice_location_multiline,
+        validate_medicaid_id_context,
+        filter_future_license_dates,
+        extract_value_before_label,
+        extract_value_after_label
+    )
+
+    # Build label search pattern (case-insensitive, flexible whitespace)
+    label_pattern = re.escape(label).replace(r"\ ", r"\s*")
+
+    # Add word boundary at start for short labels to avoid matching inside words
+    # e.g., "Name :" should not match "First Name :"
+    if len(label.split()[0]) <= 6:  # Short first word (like "Name", "Tax", "SSN")
+        label_pattern = r"(?<!\w)" + label_pattern  # Negative lookbehind for word char
+
+    label_pattern = label_pattern + r"\s*:?\s*"  # Optional colon, flexible whitespace
+
+    # Note: section filtering already done in calling function (extract_field lines 74-113)
+    # The 'text' parameter passed here is already section-filtered if section was specified
+    # For backward compatibility with existing code, alias it as search_text
+    search_text = text
+    section_name = extraction_config.get("section")  # For error messages
 
     # Search for label in text (section-aware if section was found)
     # For practice_location_name, find ALL matches and filter out Tax Information subsection
@@ -270,8 +326,28 @@ def _extract_using_label(
 
     candidates = []
 
-    # Try to find pattern match AFTER label (higher priority)
-    if pattern:
+    # SPECIAL CASE: For professional_license_expiration_date, find ALL date matches (not just first)
+    # This ensures we can filter to future dates even if past dates appear first
+    if pattern and field_name == "professional_license_expiration_date":
+        # Find ALL matches in after region
+        after_matches = list(re.finditer(pattern, after_region))
+        for after_match in after_matches:
+            value = after_match.group().strip()
+            distance = after_match.start()
+            base_conf = max(0, 0.90 - (distance / max_distance * 0.20))
+            candidates.append((value, base_conf, distance, 'after'))
+
+        # Find ALL matches in before region
+        before_matches = list(re.finditer(pattern, before_region))
+        for before_match in before_matches:
+            value = before_match.group().strip()
+            distance = len(before_region) - before_match.end()
+            base_conf = max(0, 0.85 - (distance / max_distance * 0.25))
+            candidates.append((value, base_conf, distance, 'before'))
+
+    # STANDARD CASE: For other fields, find first/closest match only
+    elif pattern:
+        # Try to find pattern match AFTER label (higher priority)
         after_match = re.search(pattern, after_region)
         if after_match:
             value = after_match.group().strip()
@@ -280,8 +356,7 @@ def _extract_using_label(
             base_conf = max(0, 0.90 - (distance / max_distance * 0.20))
             candidates.append((value, base_conf, distance, 'after'))
 
-    # Try to find pattern match BEFORE label (lower priority)
-    if pattern:
+        # Try to find pattern match BEFORE label (lower priority)
         # Search in reverse for most recent value before label
         before_matches = list(re.finditer(pattern, before_region))
         if before_matches:
@@ -298,21 +373,7 @@ def _extract_using_label(
     pattern_required = extraction_config.get("pattern_required", False)
 
     if not candidates:
-        # Special handling for practice_location_name: Use specialized PBS extractor BEFORE checking pattern_required
-        if field_name == "practice_location_name":
-            # First try the specialized PBS extractor on full text
-            try:
-                from src.extraction.pbs_name_extractor import extract_pbs_practice_name
-                pbs_name, pbs_confidence = extract_pbs_practice_name(text)
-
-                if pbs_name:
-                    # PBS organization found - use it directly
-                    candidates.append((pbs_name, pbs_confidence, 0, 'pbs_extractor'))
-            except ImportError:
-                # PBS extractor not available
-                pass
-
-        # If still no candidates and pattern is required, return None
+        # If no candidates and pattern is required, return None
         if not candidates and pattern_required and pattern:
             return FieldExtractionResult(
                 field_name=field_name,
@@ -468,6 +529,84 @@ def _extract_using_label(
                 notes=f"Rejected {len(candidates)} NPI-labeled number(s) to prevent false positive"
             )
 
+    # SPECIAL VALIDATION: For professional_license_expiration_date, filter to future dates only (BUG #1 FIX)
+    if field_name == "professional_license_expiration_date" and candidates:
+        from datetime import datetime
+
+        # Get date formats from extraction config
+        date_formats = extraction_config.get("date_formats", ["%m/%d/%Y", "%Y-%m-%d", "%m-%d-%Y"])
+        today = datetime.now().date()
+
+        future_candidates = []
+        for value, conf, dist, direc in candidates:
+            # Try to parse the date using configured formats
+            parsed_date = None
+            for date_format in date_formats:
+                try:
+                    parsed_date = datetime.strptime(value, date_format).date()
+                    break
+                except ValueError:
+                    continue
+
+            # Only keep dates that are in the future
+            if parsed_date and parsed_date > today:
+                # Boost confidence for future dates
+                boosted_conf = min(1.0, conf + 0.10)
+                future_candidates.append((value, boosted_conf, dist, direc, parsed_date))
+
+        if future_candidates:
+            # Sort by parsed date (furthest future first), then confidence
+            future_candidates.sort(key=lambda x: (-x[4].toordinal(), -x[1]))
+            # Convert back to original format (without parsed_date)
+            candidates = [(val, conf, dist, direc) for val, conf, dist, direc, _ in future_candidates]
+        else:
+            # All dates were in the past - extract most recent expired date with WARNING
+            # ISSUE #2 FIX: Better UX - show expired date with warning instead of returning None
+            past_candidates = []
+            for value, conf, dist, direc in candidates:
+                # Try to parse the date
+                parsed_date = None
+                for date_format in date_formats:
+                    try:
+                        parsed_date = datetime.strptime(value, date_format).date()
+                        break
+                    except ValueError:
+                        continue
+
+                if parsed_date:
+                    # Lower confidence for past dates
+                    lowered_conf = max(0.3, conf - 0.20)
+                    past_candidates.append((value, lowered_conf, dist, direc, parsed_date))
+
+            if past_candidates:
+                # Sort by most recent (closest to today), then confidence
+                past_candidates.sort(key=lambda x: (-x[4].toordinal(), -x[1]))
+                # Get most recent past date
+                best_past = past_candidates[0]
+                extracted_value, confidence, distance, direction, parsed_date = best_past
+                days_ago = (today - parsed_date).days
+
+                # Return with WARNING
+                return FieldExtractionResult(
+                    field_name=field_name,
+                    extracted_value=extracted_value,
+                    confidence=confidence,
+                    extraction_method="bidirectional_search",
+                    errors=[],
+                    warnings=[f"⚠️ LICENSE EXPIRED: This license expired {days_ago} days ago on {extracted_value}. Current license required."],
+                    notes=f"Extracted expired license date. Found {len(past_candidates)} past date(s), selected most recent."
+                )
+            else:
+                # Couldn't parse any dates - return None
+                return FieldExtractionResult(
+                    field_name=field_name,
+                    extracted_value=None,
+                    confidence=0.0,
+                    extraction_method="bidirectional_search",
+                    errors=["Found date(s) but could not parse them"],
+                    notes="Date parsing failed for all candidates"
+                )
+
     # Sort candidates by confidence (highest first), then distance (closest first)
     candidates.sort(key=lambda x: (-x[1], x[2]))
 
@@ -480,79 +619,16 @@ def _extract_using_label(
 
     # Post-process: Clean up practice location names
     if field_name == "practice_location_name":
-        # FLEXIBLE PBS-ONLY FORMAT: Accept PBS variations, reject non-PBS organizations
-        # PBS must start with "Positive Behavior Supports" but we'll normalize OCR variations
+        # Import cleanup functions from PBS extractor
+        from src.extraction.pbs_name_extractor import normalize_pbs_name, clean_practice_location_name
 
-        # Check if this is a PBS organization
-        is_pbs = re.search(r'Positive\s+Behavior\s+Supports', extracted_value, re.IGNORECASE)
-
-        if pattern_required and not is_pbs:
-            # Non-PBS organization (e.g., "Neuro Dverse LLC", "Tilly FL", "Apara Autism Center")
-            return FieldExtractionResult(
-                field_name=field_name,
-                extracted_value=None,
-                confidence=0.0,
-                extraction_method="bidirectional_search",
-                errors=[f"Practice location '{extracted_value[:50]}...' is not a PBS Corporation format"],
-                notes=f"Rejected non-PBS organization (pattern_required=true)"
-            )
-
-        if is_pbs:
-            # This is a PBS organization - try to normalize to proper format
-            # Expected: "Positive Behavior Supports Corporation - {Region}"
-
-            # Try strict pattern first (with dash)
-            if pattern:
-                pattern_match = re.search(pattern, extracted_value, re.IGNORECASE)
-                if pattern_match:
-                    # Perfect match - use it
-                    extracted_value = pattern_match.group().strip()
-                else:
-                    # OCR variation - try to normalize
-                    # Common OCR issues:
-                    # 1. Missing dash: "Positive Behavior Supports Corporation Emerald Coast"
-                    # 2. Swapped words: "Positive Behavior Supports Emerald Corporation Coast"
-
-                    # Extract region by finding text after "Corporation" or "Supports"
-                    region_match = re.search(r'Positive\s+Behavior\s+Supports\s+(?:Corporation\s+)?(.+?)$', extracted_value, re.IGNORECASE)
-                    if region_match:
-                        region = region_match.group(1).strip()
-                        # Remove "Corporation" if it appears in the region (swapped words case)
-                        region = re.sub(r'\b(?:Corporation|Corp\.?)\b', '', region, flags=re.IGNORECASE).strip()
-                        # Normalize to proper format
-                        extracted_value = f"Positive Behavior Supports Corporation - {region}"
-                    # else: keep original value (at least it's PBS format)
-        elif not pattern_required:
-            # Pattern optional - fall back to manual cleanup
-                    # Remove common junk prefixes (e.g., "clinical practice including special", "interests", etc.)
-                    junk_prefixes = [
-                        r'^.*?clinical\s+practice\s+including\s+special\s+',  # "clinical practice including special XYZ" -> "XYZ"
-                        r'^.*?interests\s+',  # "interests XYZ" -> "XYZ"
-                        r'^.*?as\s+appears\s+on\s+',  # "as appears on XYZ" -> "XYZ"
-                    ]
-                    for prefix_pattern in junk_prefixes:
-                        match = re.search(prefix_pattern, extracted_value, re.IGNORECASE)
-                        if match:
-                            # Remove everything up to and including the prefix
-                            extracted_value = extracted_value[match.end():]
-                            break  # Only remove first matching prefix
-
-                    # Remove common OCR artifacts and form labels
-                    extracted_value = extracted_value.replace("as appears", "")
-                    extracted_value = extracted_value.replace("Name :", "")
-                    extracted_value = extracted_value.replace(":  :", "")
-                    extracted_value = extracted_value.replace("interests", "")
-                    # Remove trailing colons and dashes
-                    extracted_value = re.sub(r'[:\-]\s*$', '', extracted_value)
-                    # Remove internal colons (but keep hyphens)
-                    extracted_value = re.sub(r'\s*:\s*', ' ', extracted_value)
+        # Try to normalize if it's a PBS organization
+        normalized_pbs = normalize_pbs_name(extracted_value)
+        if normalized_pbs:
+            extracted_value = normalized_pbs
         else:
-            # No pattern - just do basic cleanup
-            extracted_value = extracted_value.replace("as appears", "")
-            extracted_value = extracted_value.replace("Name :", "")
-            extracted_value = extracted_value.replace(":  :", "")
-            extracted_value = re.sub(r':\s*$', '', extracted_value)
-            extracted_value = re.sub(r'\s*:\s*', ' ', extracted_value)
+            # Not PBS - clean up using general cleanup function
+            extracted_value = clean_practice_location_name(extracted_value)
 
         # ALWAYS: Collapse multiple spaces/newlines to single space
         extracted_value = ' '.join(extracted_value.split())
