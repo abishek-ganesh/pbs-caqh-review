@@ -790,7 +790,12 @@ def extract_all_fields(
                 "ssn",
                 "individual_npi",
                 "practice_location_name",
-                "professional_license_expiration_date"
+                "professional_license_expiration_date",
+                "insurance_policy_number",
+                "insurance_covered_location",
+                "insurance_current_effective_date",
+                "insurance_current_expiration_date",
+                "insurance_carrier_name"
             ]
 
         field_results = []
@@ -834,13 +839,18 @@ def extract_all_fields(
 
     # Determine which fields to extract
     if field_names is None:
-        # Default: Extract 5 critical POC fields
+        # Default: Extract all 10 POC fields (5 identification + 5 insurance)
         field_names = [
             "medicaid_id",
             "ssn",
             "individual_npi",
             "practice_location_name",
-            "professional_license_expiration_date"
+            "professional_license_expiration_date",
+            "insurance_policy_number",
+            "insurance_covered_location",
+            "insurance_current_effective_date",
+            "insurance_current_expiration_date",
+            "insurance_carrier_name"
         ]
 
     # Extract each field
@@ -926,13 +936,18 @@ def extract_all_fields_from_text(
 
     # Determine which fields to extract
     if field_names is None:
-        # Default: Extract 5 critical POC fields
+        # Default: Extract all 10 POC fields (5 identification + 5 insurance)
         field_names = [
             "medicaid_id",
             "ssn",
             "individual_npi",
             "practice_location_name",
-            "professional_license_expiration_date"
+            "professional_license_expiration_date",
+            "insurance_policy_number",
+            "insurance_covered_location",
+            "insurance_current_effective_date",
+            "insurance_current_expiration_date",
+            "insurance_carrier_name"
         ]
 
     # Extract each field from the provided text
