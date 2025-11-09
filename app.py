@@ -281,13 +281,13 @@ with st.expander("ℹ️ How to Use This App", expanded=False):
 
     - ✅ Checks file integrity (corrupted files)
     - ✅ Validates document type (correct CAQH format)
-    - ✅ Extracts 5 critical fields (Medicaid ID, SSN, NPI, Practice Location, License Expiration)
+    - ✅ Extracts 10 critical fields (5 identification + 5 insurance fields)
     - ✅ Validates required fields
     - ✅ Determines final status (APPROVED/REJECTED/NEEDS_REVIEW)
 
     ### Status Meanings:
 
-    - **APPROVED**: All 5 fields extracted successfully, no validation issues
+    - **APPROVED**: All critical fields extracted successfully, no validation issues
     - **REJECTED**: Missing critical fields or wrong document type
     - **NEEDS_REVIEW**: File integrity issues or low extraction confidence
     - **ERROR**: Unexpected processing error
@@ -333,7 +333,7 @@ if uploaded_file is not None:
 
     # ========== EXTRACTED FIELDS ==========
     st.markdown("---")
-    st.subheader("📋 Extracted Fields (5 Critical POC Fields)")
+    st.subheader("📋 Extracted Fields (10 POC Fields)")
 
     if result['fields']:
         col1, col2 = st.columns(2)
@@ -346,13 +346,23 @@ if uploaded_file is not None:
                 display_field('ssn', result['fields']['ssn'])
             if 'individual_npi' in result['fields']:
                 display_field('individual_npi', result['fields']['individual_npi'])
-
-        with col2:
-            st.markdown("##### Practice & Licensing")
             if 'practice_location_name' in result['fields']:
                 display_field('practice_location_name', result['fields']['practice_location_name'])
             if 'professional_license_expiration_date' in result['fields']:
                 display_field('professional_license_expiration_date', result['fields']['professional_license_expiration_date'])
+
+        with col2:
+            st.markdown("##### Professional Liability Insurance")
+            if 'insurance_policy_number' in result['fields']:
+                display_field('insurance_policy_number', result['fields']['insurance_policy_number'])
+            if 'insurance_covered_location' in result['fields']:
+                display_field('insurance_covered_location', result['fields']['insurance_covered_location'])
+            if 'insurance_current_effective_date' in result['fields']:
+                display_field('insurance_current_effective_date', result['fields']['insurance_current_effective_date'])
+            if 'insurance_current_expiration_date' in result['fields']:
+                display_field('insurance_current_expiration_date', result['fields']['insurance_current_expiration_date'])
+            if 'insurance_carrier_name' in result['fields']:
+                display_field('insurance_carrier_name', result['fields']['insurance_carrier_name'])
     else:
         st.info("No fields extracted (document failed early validation)")
 
