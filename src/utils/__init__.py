@@ -13,14 +13,11 @@ Components:
 - reporting.py: Comprehensive error reporting and rejection templates
 """
 
-# Only import modules that exist
-# from .logger import get_logger  # TODO: Implement logger
 from .date_utils import is_future_date, is_past_date
 from .format_utils import validate_ssn, validate_npi, validate_phone, validate_email
 from .reporting import ComprehensiveReporter, get_comprehensive_reporter
 
 __all__ = [
-    # "get_logger",
     "is_future_date",
     "is_past_date",
     "validate_ssn",

@@ -7,48 +7,52 @@ __pycache__/
 env/
 venv/
 ENV/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Streamlit
-.streamlit/secrets.toml
+.venv
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
-
-# OS
 .DS_Store
-Thumbs.db
 
-# Environment
+# Environment variables
 .env
 .env.local
+*.pem
+*.key
 
-# Cache
-*.cache
-.pytest_cache/
+# Data and cache
+data/
+*.csv
+*.xlsx
+*.xls
+*.faiss
+*.pkl
+*.bin
+*.pt
+*.pth
 
 # Logs
 *.log
+logs/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
 
 # Temporary files
+*.tmp
+*.bak
+*.cache
 tmp/
 temp/
-*.tmp
+
+# OCR cache (keep the directory structure but not the cached files)
+tests/ocr_cache/*.txt
+!tests/ocr_cache/.gitkeep
+
+# Test results (keep latest but not timestamped versions)
+tests/results/test_results_*.md

@@ -298,6 +298,10 @@ def _extract_using_label(
         else:
             # All matches were in Tax section - skip this label, try next one
             label_match = None
+    # FIX #1: For license expiration date, find ALL label matches to collect dates from multiple licenses
+    elif field_name == "professional_license_expiration_date":
+        all_label_matches = list(re.finditer(label_pattern, search_text, re.IGNORECASE))
+        label_match = all_label_matches[0] if all_label_matches else None
     else:
         label_match = re.search(label_pattern, search_text, re.IGNORECASE)
 
@@ -326,24 +330,38 @@ def _extract_using_label(
 
     candidates = []
 
-    # SPECIAL CASE: For professional_license_expiration_date, find ALL date matches (not just first)
-    # This ensures we can filter to future dates even if past dates appear first
+    # SPECIAL CASE: For professional_license_expiration_date, find ALL date matches from ALL label occurrences
+    # FIX #1: This ensures we find future dates even when multiple licenses exist with different dates
     if pattern and field_name == "professional_license_expiration_date":
-        # Find ALL matches in after region
-        after_matches = list(re.finditer(pattern, after_region))
-        for after_match in after_matches:
-            value = after_match.group().strip()
-            distance = after_match.start()
-            base_conf = max(0, 0.90 - (distance / max_distance * 0.20))
-            candidates.append((value, base_conf, distance, 'after'))
+        # Search around ALL label matches (not just the first one)
+        for lbl_match in all_label_matches:
+            lbl_end = lbl_match.end()
+            lbl_start = lbl_match.start()
 
-        # Find ALL matches in before region
-        before_matches = list(re.finditer(pattern, before_region))
-        for before_match in before_matches:
-            value = before_match.group().strip()
-            distance = len(before_region) - before_match.end()
-            base_conf = max(0, 0.85 - (distance / max_distance * 0.25))
-            candidates.append((value, base_conf, distance, 'before'))
+            # Region after this label
+            after_start = lbl_end
+            after_end = min(len(search_text), lbl_end + max_distance)
+            after_rgn = search_text[after_start:after_end]
+
+            # Region before this label
+            before_start = max(0, lbl_start - max_distance)
+            before_rgn = search_text[before_start:lbl_start]
+
+            # Find ALL date matches in after region
+            after_matches = list(re.finditer(pattern, after_rgn))
+            for after_match in after_matches:
+                value = after_match.group().strip()
+                distance = after_match.start()
+                base_conf = max(0, 0.90 - (distance / max_distance * 0.20))
+                candidates.append((value, base_conf, distance, 'after'))
+
+            # Find ALL date matches in before region
+            before_matches = list(re.finditer(pattern, before_rgn))
+            for before_match in before_matches:
+                value = before_match.group().strip()
+                distance = len(before_rgn) - before_match.end()
+                base_conf = max(0, 0.85 - (distance / max_distance * 0.25))
+                candidates.append((value, base_conf, distance, 'before'))
 
     # STANDARD CASE: For other fields, find first/closest match only
     elif pattern:

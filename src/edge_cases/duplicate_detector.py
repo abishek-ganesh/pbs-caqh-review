@@ -18,6 +18,10 @@ from pathlib import Path
 from typing import Optional, Dict, List
 from pydantic import BaseModel, Field
 
+from ..utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 class SubmissionRecord(BaseModel):
     """Record of a PDF submission"""
@@ -79,7 +83,7 @@ class DuplicateDetector:
                         for rec in data
                     ]
             except Exception as e:
-                print(f"Warning: Could not load submission history: {e}")
+                logger.warning(f"Could not load submission history from {self.history_file}: {e}")
                 self.history = []
         else:
             # Create parent directory if it doesn't exist
@@ -104,7 +108,7 @@ class DuplicateDetector:
                     default=str
                 )
         except Exception as e:
-            print(f"Warning: Could not save submission history: {e}")
+            logger.warning(f"Could not save submission history to {self.history_file}: {e}")
 
     def check_for_duplicate(
         self,

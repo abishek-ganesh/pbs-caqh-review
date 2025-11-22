@@ -13,19 +13,15 @@ from pathlib import Path
 from typing import Optional, Tuple
 import pdfplumber
 import PyPDF2
+from PIL import Image
+import pdf2image
 
-# Optional: OCR dependencies (not needed for native PDFs)
+# Optional: pytesseract for OCR (requires tesseract installed)
 try:
-    from PIL import Image
-    import pdf2image
     import pytesseract
-    OCR_AVAILABLE = True
+    TESSERACT_AVAILABLE = True
 except ImportError:
-    OCR_AVAILABLE = False
-    # Dummy classes to prevent NameError if OCR not available
-    Image = None
-    pdf2image = None
-    pytesseract = None
+    TESSERACT_AVAILABLE = False
 
 
 class PDFReadError(Exception):
@@ -42,8 +38,8 @@ def read_pdf_text(pdf_path: str) -> str:
     """
     Extract text from PDF using best available method.
 
-    Tries pdfplumber first (best for native PDFs), falls back to PyPDF2.
-    Uses OCR only if absolutely no text can be extracted.
+    Tries pdfplumber first (best for native PDFs), falls back to OCR
+    for scanned documents.
 
     Args:
         pdf_path: Path to the PDF file
@@ -63,63 +59,32 @@ def read_pdf_text(pdf_path: str) -> str:
     if not pdf_file.is_file():
         raise PDFReadError(f"Path is not a file: {pdf_path}")
 
-    # Strategy 1: Try pdfplumber first (best for native PDFs)
-    pdfplumber_error = None
-    pypdf2_error = None
-    ocr_error = None
-    pdfplumber_text_length = 0
-    pypdf2_text_length = 0
-
     try:
+        # Strategy 1: Try pdfplumber first (best for native PDFs)
         text = _extract_with_pdfplumber(pdf_path)
-        pdfplumber_text_length = len(text) if text else 0
 
-        # If we got ANY text, use it (even if minimal)
-        if text and len(text.strip()) > 0:
-            return text
+        # Check if extraction yielded meaningful text
+        if is_scanned_pdf(text):
+            # PDF is scanned - try OCR
+            if TESSERACT_AVAILABLE:
+                text = extract_with_ocr(pdf_path)
+            else:
+                raise PDFReadError(
+                    "PDF appears to be scanned but Tesseract OCR is not available. "
+                    "Install tesseract-ocr to process scanned documents."
+                )
 
-    except Exception as e:
-        pdfplumber_error = str(e)
-
-    # Strategy 2: Try PyPDF2 as fallback
-    try:
-        text = _extract_with_pypdf2(pdf_path)
-        pypdf2_text_length = len(text) if text else 0
-
-        # If we got ANY text, use it
-        if text and len(text.strip()) > 0:
-            return text
+        return text
 
     except Exception as e:
-        pypdf2_error = str(e)
-
-    # Strategy 3: Try OCR only if both native methods failed to get ANY text
-    if OCR_AVAILABLE:
+        # Try PyPDF2 as last resort
         try:
-            text = extract_with_ocr(pdf_path)
-            if text and len(text.strip()) > 0:
-                return text
-        except Exception as e:
-            ocr_error = str(e)
-
-    # If we get here, all methods failed - provide detailed error info
-    error_details = []
-
-    # Include extraction attempts and text lengths
-    error_details.append(f"pdfplumber extracted {pdfplumber_text_length} chars")
-    if pdfplumber_error:
-        error_details.append(f"pdfplumber error: {pdfplumber_error}")
-
-    error_details.append(f"PyPDF2 extracted {pypdf2_text_length} chars")
-    if pypdf2_error:
-        error_details.append(f"PyPDF2 error: {pypdf2_error}")
-
-    if ocr_error:
-        error_details.append(f"OCR error: {ocr_error}")
-
-    error_msg = "Failed to extract text from PDF. " + " | ".join(error_details)
-
-    raise PDFReadError(error_msg)
+            text = _extract_with_pypdf2(pdf_path)
+            if is_scanned_pdf(text):
+                raise PDFReadError(f"PDF is scanned and OCR failed: {e}")
+            return text
+        except Exception as e2:
+            raise PDFReadError(f"Failed to read PDF: {e}. PyPDF2 also failed: {e2}")
 
 
 def _extract_with_pdfplumber(pdf_path: str) -> str:
@@ -137,16 +102,11 @@ def _extract_with_pdfplumber(pdf_path: str) -> str:
         Extracted text from all pages with proper reading order
     """
     text_parts = []
-    total_pages = 0
-    total_words = 0
 
     with pdfplumber.open(pdf_path) as pdf:
-        total_pages = len(pdf.pages)
-
         for page_num, page in enumerate(pdf.pages, start=1):
             # Extract words with their coordinates
             words = page.extract_words()
-            total_words += len(words) if words else 0
 
             if not words:
                 continue
@@ -200,16 +160,7 @@ def _extract_with_pdfplumber(pdf_path: str) -> str:
                 text_parts.append(f"\n--- Page {page_num} ---\n")
                 text_parts.append("\n".join(page_lines))
 
-    result = "".join(text_parts)
-
-    # If extraction failed, raise error with diagnostics
-    if not result or len(result.strip()) == 0:
-        raise Exception(
-            f"pdfplumber found {total_pages} pages and {total_words} words, "
-            f"but extracted 0 characters of text"
-        )
-
-    return result
+    return "".join(text_parts)
 
 
 def _extract_with_pypdf2(pdf_path: str) -> str:
@@ -223,11 +174,9 @@ def _extract_with_pypdf2(pdf_path: str) -> str:
         Extracted text from all pages
     """
     text_parts = []
-    total_pages = 0
 
     with open(pdf_path, 'rb') as file:
         reader = PyPDF2.PdfReader(file)
-        total_pages = len(reader.pages)
 
         for page_num, page in enumerate(reader.pages, start=1):
             page_text = page.extract_text()
@@ -235,15 +184,7 @@ def _extract_with_pypdf2(pdf_path: str) -> str:
                 text_parts.append(f"\n--- Page {page_num} ---\n")
                 text_parts.append(page_text)
 
-    result = "".join(text_parts)
-
-    # If extraction failed, raise error with diagnostics
-    if not result or len(result.strip()) == 0:
-        raise Exception(
-            f"PyPDF2 found {total_pages} pages but extracted 0 characters of text"
-        )
-
-    return result
+    return "".join(text_parts)
 
 
 def is_scanned_pdf(text: str) -> bool:
@@ -304,7 +245,7 @@ def extract_with_ocr(pdf_path: str) -> str:
     Raises:
         PDFReadError: If OCR fails or tesseract not available
     """
-    if not OCR_AVAILABLE:
+    if not TESSERACT_AVAILABLE:
         raise PDFReadError(
             "Tesseract OCR not available. Install pytesseract and tesseract-ocr."
         )

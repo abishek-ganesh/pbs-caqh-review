@@ -184,6 +184,24 @@ caqh-datasummaryreviewer-tool/
 
 ---
 
+## Deployment
+
+This project uses a **two-repository architecture**:
+- **pbs-caqh-local** (this repo) - Development and testing
+- **pbs-caqh-streamlit** - Streamlit Cloud deployment (production)
+
+**📖 Complete deployment guide:** [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
+
+**Quick Reference:**
+- Always create backup branch before syncing
+- Preserve password protection and deployment configs
+- Test locally before pushing to production
+- Streamlit Cloud auto-deploys on push to main
+
+**Live App:** https://pbs-caqh-review.streamlit.app
+
+---
+
 ## When to Update This File
 
 CLAUDE.md should be **stable**. Update only when:
@@ -195,7 +213,8 @@ CLAUDE.md should be **stable**. Update only when:
 
 ---
 
-*Last Updated: November 8, 2025 (Late Night) - Major code cleanup complete*
+*Last Updated: November 8, 2025 (Very Late Night) - Deployment section added*
 *Active todos and project status: GAMEPLAN.md*
 *Bug tracking and lessons learned: docs/BUGS_TRACKING.md*
+*Deployment sync workflow: Added Nov 8, 2025 (Very Late Night)*
 *Directory structure: Cleaned and accurate as of Nov 8, 2025*

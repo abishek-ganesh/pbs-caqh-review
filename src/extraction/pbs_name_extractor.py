@@ -34,8 +34,9 @@ def _clean_region_name(region: str) -> str:
     if not region:
         return region
 
-    # List of common section headers/keywords to remove
+    # List of common section headers/keywords to remove (FIX #2)
     junk_keywords = [
+        # Section headers
         'INSURANCE INFORMATION',
         'INSURANCE',
         'PROFESSIONAL IDENTIFICATION',
@@ -48,7 +49,15 @@ def _clean_region_name(region: str) -> str:
         'ATTESTATION',
         'PRACTICE LOCATIONS',
         'LOCATION',
-        'INFORMATION'
+        'INFORMATION',
+        'CREDENTIALING',
+        # Form field values that get appended
+        'Yes',
+        'No',
+        # Billing Department (wrong section - should use Practice Location)
+        'Billing Department',
+        'Billing',
+        'Department',
     ]
 
     # Remove junk keywords (case-insensitive)
@@ -160,7 +169,7 @@ def clean_practice_location_name(value: str) -> str:
     value = value.replace(":  :", "")
     value = value.replace("interests", "")
 
-    # Remove trailing unwanted text (stop at common field indicators)
+    # Remove trailing unwanted text (stop at common field indicators) - FIX #2
     stop_patterns = [
         r'\s+Street\s+.*$',
         r'\s+Address.*$',
@@ -170,6 +179,18 @@ def clean_practice_location_name(value: str) -> str:
         r'\s+indicate\s+.*$',   # Handle "indicate to which..."
         r'\s+which\s+.*$',
         r'\s+please\s+.*$',
+        # Form field values that get appended
+        r'\s*-?\s*Yes\s*$',
+        r'\s*-?\s*No\s*$',
+        # Section headers
+        r'\s+INSURANCE\s+.*$',
+        r'\s+CREDENTIALING\s+.*$',
+        r'\s+HOSPITAL\s+.*$',
+        r'\s+EDUCATION\s+.*$',
+        r'\s+DISCLOSURE\s+.*$',
+        # Wrong section indicators
+        r'\s+Billing\s+Department.*$',
+        r'\s+Billing.*$',
     ]
     for pattern in stop_patterns:
         value = re.sub(pattern, '', value, flags=re.IGNORECASE)
@@ -395,6 +416,19 @@ def extract_pbs_practice_name(text: str) -> Tuple[Optional[str], float]:
         if region and len(region) > 2:
             full_name = f"Positive Behavior Supports Corporation - {region}"
             return full_name, 0.80
+
+    # Pattern 6: PBS without region - just "Positive Behavior Support(s) Corporation"
+    # (some providers don't have a region suffix)
+    # Note: OCR may show "Support" or "Supports" - we preserve the original spelling
+    no_region_pattern = re.compile(
+        r'Positive\s+Behavior\s+(Supports?)\s*\n*.*?Corp(?:oration)?(?!\s*[-–]\s*[A-Za-z])',
+        re.IGNORECASE | re.DOTALL
+    )
+    no_region_match = no_region_pattern.search(text)
+    if no_region_match:
+        # Preserve the original spelling (Support vs Supports)
+        support_word = no_region_match.group(1)
+        return f"Positive Behavior {support_word} Corporation", 0.85
 
     # No PBS organization found
     return None, 0.0

@@ -9,12 +9,9 @@ Components:
 - constants.py: Application constants and enums
 """
 
-# Only import modules that exist
-# from .settings import Settings  # TODO: Implement settings loader
 from .constants import UserType, ValidationStatus, FieldCategory
 
 __all__ = [
-    # "Settings",
     "UserType",
     "ValidationStatus",
     "FieldCategory"

@@ -11,6 +11,10 @@ from typing import Dict, Optional, List, Any
 from pydantic import BaseModel, Field, ValidationError
 from functools import lru_cache
 
+from ..utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 class ExtractionConfig(BaseModel):
     """Configuration for field extraction from PDF"""
@@ -212,8 +216,7 @@ class RuleLoader:
                     field_rule = FieldRule(**rule_dict)
                     self._rules[field_name] = field_rule
                 except ValidationError as e:
-                    # Log error but continue loading other rules
-                    print(f"Warning: Failed to parse rule for field '{field_name}': {e}")
+                    logger.warning(f"Failed to parse validation rule for field '{field_name}': {e}")
                     continue
 
             self._loaded = True

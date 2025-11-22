@@ -23,6 +23,8 @@ from src.extraction.pdf_reader import read_pdf_text
 from src.extraction.field_extractor import extract_all_fields
 from src.edge_cases.file_integrity import FileIntegrityChecker
 from src.edge_cases.document_type_checker import DocumentTypeChecker
+from src.validation.validation_engine import get_validation_engine
+from src.utils.html_generator import generate_html_output
 
 # ==============================================================================
 # PAGE CONFIGURATION
@@ -34,63 +36,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
-
-# ==============================================================================
-# PASSWORD PROTECTION
-# ==============================================================================
-
-def check_password():
-    """Returns `True` if the user has entered the correct password."""
-
-    # Get password from Streamlit secrets (set in Streamlit Cloud dashboard)
-    # Default password for local testing: "caqh2025"
-    correct_password = st.secrets.get("password", "caqh2025")
-
-    def password_entered():
-        """Checks whether a password entered by the user is correct."""
-        if st.session_state["password"] == correct_password:
-            st.session_state["password_correct"] = True
-            del st.session_state["password"]  # Don't store password
-        else:
-            st.session_state["password_correct"] = False
-
-    # First run or password not correct
-    if "password_correct" not in st.session_state:
-        # Show login form
-        st.title("🔒 CAQH Data Summary Reviewer - POC")
-        st.markdown("### Password Required")
-        st.markdown("This is a secure testing environment for PBS credentialing team.")
-        st.markdown("---")
-        st.text_input(
-            "Enter password to continue:",
-            type="password",
-            on_change=password_entered,
-            key="password"
-        )
-        st.info("💡 **Need access?** Contact Abishek for the password.")
-        return False
-    elif not st.session_state["password_correct"]:
-        # Password incorrect
-        st.title("🔒 CAQH Data Summary Reviewer - POC")
-        st.markdown("### Password Required")
-        st.markdown("This is a secure testing environment for PBS credentialing team.")
-        st.markdown("---")
-        st.text_input(
-            "Enter password to continue:",
-            type="password",
-            on_change=password_entered,
-            key="password"
-        )
-        st.error("❌ Password incorrect. Please try again.")
-        st.info("💡 **Need access?** Contact Abishek for the password.")
-        return False
-    else:
-        # Password correct
-        return True
-
-# Check password before showing the app
-if not check_password():
-    st.stop()  # Don't continue if password is incorrect
 
 # ==============================================================================
 # HELPER FUNCTIONS
@@ -126,7 +71,9 @@ def process_pdf(pdf_path: str):
         },
         'fields': {},
         'extraction_time': 0,
-        'total_time': 0
+        'total_time': 0,
+        'html_output': None,  # NEW: Enhanced HTML output
+        'validation_result': None  # NEW: Full validation result object
     }
 
     start_total = time.time()
@@ -189,6 +136,25 @@ def process_pdf(pdf_path: str):
             result['final_status'] = 'REJECTED'
         else:
             result['final_status'] = 'APPROVED'
+
+        # Step 5: Run validation and generate enhanced HTML output
+        try:
+            pdf_filename = Path(pdf_path).name
+            validation_engine = get_validation_engine()
+            validation_result = validation_engine.validate_document(extraction_result, pdf_filename)
+            result['validation_result'] = validation_result
+
+            # Generate enhanced HTML with dropdown templates and bulk rejection box
+            html_output = generate_html_output(
+                validation_result=validation_result,
+                pdf_filename=pdf_filename,
+                include_timestamp=True,
+                include_confidence=True
+            )
+            result['html_output'] = html_output
+        except Exception as html_error:
+            # HTML generation failed but extraction succeeded - continue
+            result['html_output'] = f"<p>HTML generation error: {str(html_error)}</p>"
 
         result['total_time'] = round(time.time() - start_total, 2)
         return result
@@ -365,6 +331,27 @@ if uploaded_file is not None:
                 display_field('insurance_carrier_name', result['fields']['insurance_carrier_name'])
     else:
         st.info("No fields extracted (document failed early validation)")
+
+    # ========== ENHANCED HTML OUTPUT ==========
+    st.markdown("---")
+    st.subheader("📄 Enhanced HTML Report")
+
+    if result.get('html_output'):
+        # Download button for HTML file
+        html_filename = f"{uploaded_file.name.replace('.pdf', '')}_review.html"
+        st.download_button(
+            label="📥 Download HTML Report",
+            data=result['html_output'],
+            file_name=html_filename,
+            mime="text/html",
+            help="Download the enhanced HTML report with dropdown templates and bulk rejection text box"
+        )
+
+        # Preview HTML in expandable section
+        with st.expander("👁️ Preview HTML Report", expanded=False):
+            st.components.v1.html(result['html_output'], height=800, scrolling=True)
+    else:
+        st.info("HTML report not available")
 
     # ========== EDGE CASE CHECKS ==========
     st.markdown("---")
