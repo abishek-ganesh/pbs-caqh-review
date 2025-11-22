@@ -11,7 +11,7 @@ pdfplumber==0.10.3
 
 # OCR for scanned documents
 pytesseract==0.3.10
-Pillow==10.1.0
+Pillow>=10.4.0
 
 # PDF manipulation and analysis
 pdf2image==1.16.3
@@ -33,7 +33,7 @@ langchain-anthropic==0.0.1
 
 # Vector store for RAG (Cheat Sheet knowledge base)
 chromadb==0.4.18
-faiss-cpu==1.7.4
+# faiss-cpu==1.7.4  # Disabled - no Python 3.13 support
 
 # Text embeddings
 sentence-transformers==2.2.2
