@@ -25,6 +25,7 @@ from ..models.extraction_result import (
     get_extraction_summary
 )
 from .pdf_reader import read_pdf_text, validate_pdf_file, WrongDocumentTypeError
+from ..edge_cases.document_type_checker import DocumentTypeChecker
 
 
 # Path to validation rules configuration
@@ -992,6 +993,11 @@ def extract_all_fields_from_text(
     # Determine primary extraction method
     extraction_method = "cached_text"  # Since we're working with pre-extracted text
 
+    # Check if this is a valid CAQH document using the document type checker
+    doc_type_checker = DocumentTypeChecker()
+    doc_type_result = doc_type_checker.validate_document(str(pdf_path), text)
+    is_caqh_document = doc_type_result.is_valid_caqh
+
     extraction_time = time.time() - start_time
 
     return DocumentExtractionResult(
@@ -1002,7 +1008,7 @@ def extract_all_fields_from_text(
         field_results=field_results,
         extraction_time=extraction_time,
         extraction_method=extraction_method,
-        is_caqh_document=True  # Assume true for now, caller should validate
+        is_caqh_document=is_caqh_document
     )
 
 

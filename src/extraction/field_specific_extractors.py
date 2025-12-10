@@ -321,8 +321,28 @@ def extract_insurance_fields(text: str) -> dict:
 
     # Extract ALL insurance policies in this section
     # A policy starts with "Policy Number" and contains multiple fields
-    policy_pattern = r'Policy\s+Number\s*:?\s*([A-Z0-9\-]+)'
-    policy_matches = list(re.finditer(policy_pattern, insurance_section, re.IGNORECASE))
+    # Handle OCR split where "Policy" and "Number" may be on different lines:
+    #   - "Policy Number : 6799172" (normal)
+    #   - "Policy  6799172\nNumber :" (OCR split - value between Policy and Number)
+    policy_patterns = [
+        r'Policy\s+Number\s*:?\s*([A-Z0-9\-]+)',  # Normal: Policy Number : VALUE
+        r'Policy\s+([A-Z0-9\-]{5,})\s*\n?\s*Number\s*:',  # OCR split: Policy VALUE \n Number :
+    ]
+
+    policy_matches = []
+    for pattern in policy_patterns:
+        matches = list(re.finditer(pattern, insurance_section, re.IGNORECASE))
+        policy_matches.extend(matches)
+
+    # Deduplicate by position (keep earliest match for overlapping patterns)
+    if policy_matches:
+        policy_matches = sorted(policy_matches, key=lambda m: m.start())
+        # Remove duplicates that are too close together (within 50 chars)
+        deduped = [policy_matches[0]]
+        for m in policy_matches[1:]:
+            if m.start() - deduped[-1].start() > 50:
+                deduped.append(m)
+        policy_matches = deduped
 
     if not policy_matches:
         # No policies found
@@ -380,10 +400,26 @@ def extract_insurance_fields(text: str) -> dict:
             'insurance_address_zip',
         ]}
 
-    # Select the policy with the furthest expiration date
-    # Sort by expiration date (furthest first), with None dates last
-    policies_with_dates = [p for p in policies if p.get('_parsed_expiration')]
-    policies_without_dates = [p for p in policies if not p.get('_parsed_expiration')]
+    # === PBS POLICY PRIORITIZATION ===
+    # For PBS credentialing, we need to find the policy with "Positive Behavior" or "PBS"
+    # in the covered location. This ensures we get the correct insurance for PBS employees.
+
+    def is_pbs_policy(policy: dict) -> bool:
+        """Check if this is a PBS-related insurance policy."""
+        covered_loc = policy.get('insurance_covered_location', '') or ''
+        covered_loc_lower = covered_loc.lower()
+        return 'positive behavior' in covered_loc_lower or 'pbs' in covered_loc_lower
+
+    # Separate PBS policies from non-PBS policies
+    pbs_policies = [p for p in policies if is_pbs_policy(p)]
+    non_pbs_policies = [p for p in policies if not is_pbs_policy(p)]
+
+    # Prefer PBS policies; fall back to non-PBS if none found
+    candidate_policies = pbs_policies if pbs_policies else non_pbs_policies
+
+    # Among candidates, select the one with furthest expiration date
+    policies_with_dates = [p for p in candidate_policies if p.get('_parsed_expiration')]
+    policies_without_dates = [p for p in candidate_policies if not p.get('_parsed_expiration')]
 
     if policies_with_dates:
         policies_with_dates.sort(key=lambda p: p['_parsed_expiration'], reverse=True)
@@ -392,8 +428,8 @@ def extract_insurance_fields(text: str) -> dict:
         # No dates found, just use the first policy
         selected_policy = policies_without_dates[0]
     else:
-        # Shouldn't happen, but just in case
-        selected_policy = policies[0]
+        # Shouldn't happen, but just in case - fall back to any policy
+        selected_policy = policies[0] if policies else {}
 
     # Remove the temporary _parsed_expiration field
     if '_parsed_expiration' in selected_policy:
@@ -474,11 +510,31 @@ def _extract_date_near_label(
             if not is_excluded:
                 candidates.append((before_date, before_distance, 'before'))
 
-        # Return the closest date (prefer after, but use before if much closer)
+        # Return the best date candidate
+        # STRONGLY prefer AFTER dates because:
+        # - The date directly after a label is most reliably associated with that label
+        # - BEFORE dates may belong to a preceding field (e.g., effective date before expiration label)
         if candidates:
-            # Sort by distance, prefer 'after' for ties
-            candidates.sort(key=lambda x: (x[1], 0 if x[2] == 'after' else 1))
-            return candidates[0][0]
+            # Separate after and before candidates
+            after_candidates = [c for c in candidates if c[2] == 'after']
+            before_candidates = [c for c in candidates if c[2] == 'before']
+
+            # If we have an AFTER date, use it (unless BEFORE is dramatically closer)
+            if after_candidates:
+                after_candidates.sort(key=lambda x: x[1])
+                best_after = after_candidates[0]
+
+                # Only consider BEFORE if it's at least 3x closer than AFTER
+                if before_candidates:
+                    before_candidates.sort(key=lambda x: x[1])
+                    best_before = before_candidates[0]
+                    if best_before[1] * 3 < best_after[1]:  # BEFORE is 3x closer
+                        return best_before[0]
+
+                return best_after[0]
+            elif before_candidates:
+                before_candidates.sort(key=lambda x: x[1])
+                return before_candidates[0][0]
 
     return None
 
@@ -499,18 +555,82 @@ def _extract_single_policy(policy_text: str) -> dict:
     policy_num_match = re.search(r'Policy\s+Number\s*:?\s*([A-Z0-9\-]+)', policy_text, re.IGNORECASE)
     extracted['insurance_policy_number'] = policy_num_match.group(1).strip() if policy_num_match else None
 
-    # Covered Practice Location (may be empty)
-    # This field is often empty, so be careful not to capture the next field label
-    covered_loc_match = re.search(
-        r'Covered\s+Practice\s+Locations?\s*:?\s*([^\n:]+)',
-        policy_text,
-        re.IGNORECASE
-    )
-    if covered_loc_match:
-        loc = covered_loc_match.group(1).strip()
-        # Don't capture field labels (Original, Current, Carrier, etc.)
-        if not re.match(r'^(Original|Current|Carrier|Street|City|State)', loc, re.IGNORECASE):
-            extracted['insurance_covered_location'] = loc if loc and len(loc) > 2 else None
+    # Covered Practice Location (may be empty or split across lines)
+    # OCR sometimes splits this field with part BEFORE and part AFTER the label:
+    #   "Positive Behavior Supports"        <- before label
+    #   "Covered Practice Locations :"
+    #   "Corporation Central Florida"       <- after label
+    # We need to capture and combine both parts.
+
+    covered_label_match = re.search(r'Covered\s+Practice\s+Locations?\s*:?', policy_text, re.IGNORECASE)
+
+    if covered_label_match:
+        label_start = covered_label_match.start()
+        label_end = covered_label_match.end()
+
+        # === PART 1: Look BEFORE the label ===
+        # Search between policy number and covered label for organization names
+        before_text = policy_text[:label_start]
+        # Get the last few lines before the label (skip policy number and empty lines)
+        before_lines = before_text.strip().split('\n')
+        before_value = ''
+        for line in reversed(before_lines[-3:]):  # Last 3 lines before label
+            line = line.strip()
+            # Skip empty lines, colons, and field labels
+            if not line or line == ':' or re.match(r'^(Policy|Self|Individual|No|Yes)\s', line, re.IGNORECASE):
+                continue
+            # Skip if it's a number or date
+            if re.match(r'^[\d\-/]+$', line):
+                continue
+            # This looks like part of the location name
+            before_value = line
+            break
+
+        # === PART 2: Look AFTER the label ===
+        after_text = policy_text[label_end:label_end + 150]
+        after_lines = after_text.strip().split('\n')
+        after_parts = []
+        for line in after_lines[:3]:  # Up to 3 lines after label
+            line = line.strip()
+            # Skip empty lines and colons
+            if not line or line == ':':
+                continue
+            # Stop at field labels (Original, Current, Carrier, etc.)
+            if re.match(r'^(Original|Current|Carrier|Street|City|State|Self)', line, re.IGNORECASE):
+                break
+            # Skip if it's just a date
+            if re.match(r'^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$', line):
+                break
+            # Clean dashes that are separators
+            line = re.sub(r'^[-\s]+', '', line)
+            if line:
+                after_parts.append(line)
+
+        after_value = ' '.join(after_parts)
+
+        # === COMBINE: before + after ===
+        def normalize_location(loc: str) -> str:
+            """Normalize covered location - standardize dashes and spaces."""
+            if not loc:
+                return loc
+            # Normalize multiple spaces
+            loc = re.sub(r'\s+', ' ', loc).strip()
+            # Standardize dash/hyphen with spaces around it (handle various dash types)
+            loc = re.sub(r'\s*[-–—]\s*', ' - ', loc)
+            return loc
+
+        # If we have both parts, combine them
+        if before_value and after_value:
+            combined = f"{before_value} {after_value}"
+            extracted['insurance_covered_location'] = normalize_location(combined)
+        elif before_value:
+            extracted['insurance_covered_location'] = normalize_location(before_value)
+        elif after_value:
+            # Don't capture field labels
+            if not re.match(r'^(Original|Current|Carrier|Street|City|State)', after_value, re.IGNORECASE):
+                extracted['insurance_covered_location'] = normalize_location(after_value)
+            else:
+                extracted['insurance_covered_location'] = None
         else:
             extracted['insurance_covered_location'] = None
     else:
@@ -533,49 +653,10 @@ def _extract_single_policy(policy_text: str) -> dict:
         exclude_labels=['Original', 'Effective Date']
     )
 
-    # Carrier/Self Insured Name (may span multiple lines)
-    # Due to OCR quirks, carrier name may appear BEFORE the label
-    # Try multiple patterns to handle different layouts
-
-    # Pattern 1: Text after "Carrier/Self Insured Name" label
-    carrier_match = re.search(
-        r'Carrier/Self\s+Insured\s+Name\s*:?\s*([^\n:]+)',
-        policy_text,
-        re.IGNORECASE
-    )
-
-    if carrier_match:
-        carrier_name = carrier_match.group(1).strip()
-
-        # Check if this is just "Inc." or similar suffix (too short to be full name)
-        if len(carrier_name) < 10:
-            # Look for carrier name BEFORE the label (OCR quirk)
-            # Search between expiration date and carrier label
-            before_carrier_match = re.search(
-                r'Current\s+Expiration\s+Date\s*:?\s*\d{1,2}[/-]\d{1,2}[/-]\d{4}\s*:?\s*([^\n]+)\s*Carrier/Self\s+Insured\s+Name',
-                policy_text,
-                re.IGNORECASE | re.DOTALL
-            )
-            if before_carrier_match:
-                before_text = before_carrier_match.group(1).strip()
-                # Clean up and combine
-                carrier_name = before_text + ' ' + carrier_name
-
-        extracted['insurance_carrier_name'] = carrier_name.strip() if carrier_name and len(carrier_name.strip()) > 2 else None
-    else:
-        # Pattern 2: If no match, search between expiration date and street address
-        fallback_match = re.search(
-            r'Current\s+Expiration\s+Date.*?(\d{1,2}[/-]\d{1,2}[/-]\d{4}).*?([A-Za-z][^\n:]{3,100}?)(?=\s+Street\s+1|\s+City\s*:)',
-            policy_text,
-            re.IGNORECASE | re.DOTALL
-        )
-        if fallback_match:
-            carrier_name = fallback_match.group(2).strip()
-            # Remove common labels if accidentally captured
-            carrier_name = re.sub(r'Carrier/Self\s+Insured\s+Name\s*:?\s*', '', carrier_name, flags=re.IGNORECASE)
-            extracted['insurance_carrier_name'] = carrier_name if carrier_name and len(carrier_name) > 2 else None
-        else:
-            extracted['insurance_carrier_name'] = None
+    # Carrier/Self Insured Name extraction
+    # Handles various OCR quirks where carrier may appear BEFORE label,
+    # label may be split across lines, or carrier name itself may be split
+    extracted['insurance_carrier_name'] = _extract_carrier_name(policy_text)
 
     # Insurance Address Street 1
     street1_match = re.search(r'Street\s+1\s*:?\s*([^\n:]+)', policy_text, re.IGNORECASE)
@@ -610,6 +691,125 @@ def _extract_single_policy(policy_text: str) -> dict:
     extracted['insurance_address_zip'] = zip_match.group(1).strip() if zip_match else None
 
     return extracted
+
+
+def _extract_carrier_name(policy_text: str) -> Optional[str]:
+    """
+    Extract Carrier/Self Insured Name handling various OCR formatting issues.
+
+    OCR can produce various layouts:
+    1. Normal: "Carrier/Self Insured Name : Lexington Insurance Company"
+    2. Carrier BEFORE label: "Lexington Insurance Company\\nCarrier/Self Insured Name :"
+    3. Label SPLIT: "Carrier/Self Insured  Lexington Insurance Company\\nName :"
+    4. Carrier SPLIT: "Lexington  Company\\nCarrier/Self Insured Name  Insurance"
+
+    Args:
+        policy_text: Text of a single insurance policy
+
+    Returns:
+        Carrier name string or None
+    """
+    # Known insurance company patterns to validate extraction
+    insurance_keywords = [
+        'insurance', 'company', 'inc', 'llc', 'corp', 'corporation',
+        'agency', 'group', 'indemnity', 'mutual', 'associates'
+    ]
+
+    def looks_like_carrier(text: str) -> bool:
+        """Check if text looks like an insurance company name."""
+        if not text or len(text) < 5:
+            return False
+        text_lower = text.lower()
+        return any(kw in text_lower for kw in insurance_keywords)
+
+    def clean_carrier_name(name: str) -> str:
+        """Clean up extracted carrier name."""
+        name = re.sub(r'^[\s:]+|[\s:]+$', '', name)
+        name = re.sub(r'Carrier/Self\s+Insured\s+Name\s*:?\s*', '', name, flags=re.IGNORECASE)
+        name = re.sub(r'^Name\s*:?\s*', '', name, flags=re.IGNORECASE)
+        name = re.sub(r'\s*(Street|City|Province|State)\s*[\d:].+$', '', name, flags=re.IGNORECASE)
+        name = re.sub(r'\s+', ' ', name).strip()
+        return name
+
+    candidates = []
+
+    # === PATTERN 1: Normal - carrier name AFTER label on same line ===
+    match1 = re.search(
+        r'Carrier/Self\s+Insured(?:\s+Name)?\s*:?\s+([A-Za-z][^\n]{5,80})',
+        policy_text,
+        re.IGNORECASE
+    )
+    if match1:
+        name = clean_carrier_name(match1.group(1))
+        if looks_like_carrier(name):
+            candidates.append((name, 1, match1.start()))
+
+    # === PATTERN 2: Carrier BEFORE label ===
+    label_match = re.search(r'Carrier/Self\s+Insured', policy_text, re.IGNORECASE)
+    if label_match:
+        before_text = policy_text[:label_match.start()]
+        lines_before = before_text.strip().split('\n')
+        for i, line in enumerate(reversed(lines_before[-3:])):
+            line = line.strip()
+            if not line or line == ':' or re.match(r'^[\d\-/:]+$', line):
+                continue
+            if re.match(r'^(Current|Original|Policy|Self|Do |Type |Amount )', line, re.IGNORECASE):
+                continue
+            name = clean_carrier_name(line)
+            if looks_like_carrier(name):
+                candidates.append((name, 2, label_match.start() - i))
+                break
+
+    # === PATTERN 3: Label SPLIT with carrier in middle ===
+    match3 = re.search(
+        r'Carrier/Self\s+Insured\s+([A-Za-z][^\n]{5,80})\s*\n\s*Name\s*:',
+        policy_text,
+        re.IGNORECASE
+    )
+    if match3:
+        name = clean_carrier_name(match3.group(1))
+        if looks_like_carrier(name):
+            candidates.append((name, 1, match3.start()))
+
+    # === PATTERN 4: Carrier SPLIT across lines with label in middle ===
+    if label_match:
+        before_region = policy_text[max(0, label_match.start()-100):label_match.start()]
+        after_region = policy_text[label_match.end():label_match.end()+100]
+
+        before_partial = re.search(r'([A-Za-z][\w\s]{3,30}\s+(?:Ins|Insurance|Company|Co))\s*$', before_region)
+        after_partial = re.search(r'^[\s:Name]*\s*([A-Za-z][\w\s]{3,30}(?:Insurance|Company|Inc|LLC|Corp))', after_region, re.IGNORECASE)
+
+        if before_partial and after_partial:
+            combined = before_partial.group(1).strip() + ' ' + after_partial.group(1).strip()
+            combined = clean_carrier_name(combined)
+            if looks_like_carrier(combined):
+                candidates.append((combined, 3, label_match.start()))
+        elif after_partial:
+            name = clean_carrier_name(after_partial.group(1))
+            if looks_like_carrier(name):
+                candidates.append((name, 2, label_match.end()))
+
+    # === PATTERN 5: Fallback - search for known insurance company patterns ===
+    fallback_match = re.search(
+        r'([A-Za-z][\w\s]{3,40}(?:Insurance\s+Company|Insurance\s+Co|Ins\s+Co|Agency\s+LLC|Insurance))',
+        policy_text,
+        re.IGNORECASE
+    )
+    if fallback_match:
+        name = clean_carrier_name(fallback_match.group(1))
+        if looks_like_carrier(name) and len(name) > 10:
+            candidates.append((name, 4, fallback_match.start()))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda x: (x[1], x[2]))
+    best_name = candidates[0][0]
+
+    if looks_like_carrier(best_name) and len(best_name) >= 5:
+        return best_name
+
+    return None
 
 
 def _parse_date(date_str: str) -> Optional[datetime]:

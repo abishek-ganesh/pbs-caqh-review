@@ -30,6 +30,27 @@ Project context and guidance for AI assistants working on this codebase.
 
 ---
 
+## ⚠️ CRITICAL: Never Modify Ground Truth Without Permission
+
+**NEVER update ground truth files without explicit permission from the user.**
+
+Ground truth files are located in:
+- `data/ground_truth/*.json` - Individual PDF ground truth files
+- `data/GROUND_TRUTH.md` - Human-readable ground truth summary
+
+**Why this matters:**
+- Ground truth defines what "correct" extraction looks like
+- Incorrect ground truth leads to false accuracy metrics
+- Only the user (who has access to actual PDFs) can verify correct values
+
+**If you suspect ground truth is wrong:**
+1. Report the discrepancy to the user
+2. Show the extracted value vs expected value
+3. Ask for permission before making any changes
+4. Wait for explicit approval
+
+---
+
 ## Quick Reference
 
 ### Essential Documentation

@@ -367,8 +367,9 @@ def extract_pbs_practice_name(text: str) -> Tuple[Optional[str], float]:
                 return full_name, 0.85
 
     # Pattern 4: More flexible - find PBS anywhere and try to find region nearby
+    # Match both "Supports" (plural) and "Support" (singular) - OCR sometimes drops the 's'
     pbs_pattern = re.compile(
-        r'Positive\s+Behavior\s+Supports',
+        r'Positive\s+Behavior\s+Supports?',
         re.IGNORECASE
     )
 
@@ -380,30 +381,47 @@ def extract_pbs_practice_name(text: str) -> Tuple[Optional[str], float]:
             end = min(len(text), match.end() + 200)
             context = text[start:end]
 
-            # Try to find "Corporation" followed by a region
+            # Try to find "Corporation" or "Corp." followed by a region
             # BUGFIX: Removed [A-Z]{2,}\s+[A-Z]{2,} from stop pattern - was matching lowercase with IGNORECASE flag
             # Now relies on _clean_region_name() to remove trailing all-caps section headers
-            corp_pattern = re.compile(
-                r'Corporation\s*[-–]?\s*([A-Za-z][A-Za-z\s&]+?)(?:\n|Street|Phone|$)',
+            # Match both "Corporation" and "Corp." (abbreviation used in some PDFs like SMata)
+            # Pattern A: Region on same line as Corporation/Corp.
+            corp_pattern_same_line = re.compile(
+                r'Corporation\s*[-–]?\s*([A-Za-z][A-Za-z\s&,]+?)(?:\n|Street|Phone|$)',
                 re.IGNORECASE
             )
-            corp_match = corp_pattern.search(context)
+            corp_match = corp_pattern_same_line.search(context)
             if corp_match:
                 region = corp_match.group(1).strip()
                 region = ' '.join(region.split())
-                # BUG #2B FIX: Clean junk text
                 region = _clean_region_name(region)
 
-                # Validate region looks reasonable (not too short, not too long)
+                if region and 2 <= len(region) <= 50 and not region.lower().startswith('street'):
+                    full_name = f"Positive Behavior Supports Corporation - {region}"
+                    return full_name, 0.85
+
+            # Pattern B: Corp. followed by region (possibly on next line after colon)
+            # Handles: "Corp.\n:\nSan Antonio, TX"
+            corp_pattern_multiline = re.compile(
+                r'Corp\.?\s*\n(?::\n)?([A-Za-z][A-Za-z\s&,]+?)(?:\n|Street|Phone|$)',
+                re.IGNORECASE
+            )
+            corp_match = corp_pattern_multiline.search(context)
+            if corp_match:
+                region = corp_match.group(1).strip()
+                region = ' '.join(region.split())
+                region = _clean_region_name(region)
+
                 if region and 2 <= len(region) <= 50 and not region.lower().startswith('street'):
                     full_name = f"Positive Behavior Supports Corporation - {region}"
                     return full_name, 0.85
 
     # Pattern 5: Check for split pattern where Corporation appears before PBS
     # (happens in some OCR cases)
+    # Match both "Supports" (plural) and "Support" (singular)
     reverse_pattern = re.compile(
         r'Corporation\s*[-–]?\s*([A-Za-z][A-Za-z\s&]+?)\s*\n*.*?'
-        r'Positive\s+Behavior\s+Supports',
+        r'Positive\s+Behavior\s+Supports?',
         re.IGNORECASE | re.DOTALL
     )
 
@@ -416,6 +434,80 @@ def extract_pbs_practice_name(text: str) -> Tuple[Optional[str], float]:
         if region and len(region) > 2:
             full_name = f"Positive Behavior Supports Corporation - {region}"
             return full_name, 0.80
+
+    # Pattern 7: Multi-line Practice Name extraction (handles OCR variations)
+    # Captures "Practice Name" label followed by PBS name split across lines
+    # Handles: "Support Corp.", typos like "supoorts", "/" separator, etc.
+    # Also handles colon-only lines between parts (common OCR artifact)
+    # Examples:
+    #   "Practice Name  Positive Behavior support\n:\nCorporation-palm beach"
+    #   "Practice Name  Positive Behavior Support Corp.\nSan Antonio, TX"
+    #   "Practice Name  supoorts\ncoorporation/ palm beach"
+    practice_name_multiline = re.compile(
+        r'Practice\s+(?:Name|Location)\s+(?:it\s+the\s+)?'  # Label (with optional "it the" OCR artifact)
+        r'([^\n]+)\n'     # First line content
+        r'(?::\n)?'       # Optional colon-only line (common OCR artifact)
+        r'([^\n]+)',      # Second line content (after optional colon line)
+        re.IGNORECASE
+    )
+
+    for match in practice_name_multiline.finditer(text):
+        line1 = match.group(1).strip()
+        line2 = match.group(2).strip()
+
+        # Skip if line2 looks like a different field (City, State, County, etc.)
+        if re.match(r'^(City|State|County|Province|Street|Can general|Phone|Fax|Office)', line2, re.IGNORECASE):
+            continue
+
+        # Skip if line2 is just a colon (will be handled by next iteration)
+        if line2 == ':':
+            continue
+
+        # Combine lines - handle Corporation split
+        combined = f"{line1} {line2}".strip()
+
+        # Check if this looks like a PBS organization name
+        # Match various PBS patterns including typos
+        pbs_check = re.search(
+            r'(?:positive\s+)?behavior\s+(?:supports?|supoorts?)',
+            combined,
+            re.IGNORECASE
+        )
+        if pbs_check:
+            # Found a PBS name - clean it up minimally and return
+            # Remove common OCR artifacts
+            cleaned = re.sub(r'\s+', ' ', combined)  # Normalize whitespace
+            cleaned = re.sub(r'^W-9:?\s*', '', cleaned)  # Remove "W-9:" prefix
+            cleaned = cleaned.strip()
+
+            # If it contains Corp/Corporation and a region indicator, return it
+            if re.search(r'corp|corporation|coorp', cleaned, re.IGNORECASE):
+                return cleaned, 0.88
+
+    # Pattern 8: Handle "Practice Location" with multi-line name (lower in document)
+    # This appears in Insurance section like: "Practice Location  positive behavior supoorts\ncoorporation/ palm beach"
+    practice_location_multiline = re.compile(
+        r'(?:Practice\s+)?Location\s+(?:Type\s+)?(?:Practice\s+Location\s+)?(?:Location\s+)?'
+        r'([^\n]*?(?:positive|behavior|support|supoort)[^\n]*)\n'
+        r'([^\n]+)',
+        re.IGNORECASE
+    )
+
+    for match in practice_location_multiline.finditer(text):
+        line1 = match.group(1).strip()
+        line2 = match.group(2).strip()
+
+        # Skip if line2 looks like a different field
+        if re.match(r'^(City|State|County|Province|Street|Can general|Phone|Fax|Covered)', line2, re.IGNORECASE):
+            continue
+
+        combined = f"{line1} {line2}".strip()
+
+        # Check for PBS-like pattern
+        if re.search(r'(?:positive\s+)?behavior', combined, re.IGNORECASE):
+            cleaned = re.sub(r'\s+', ' ', combined)
+            if re.search(r'corp|corporation|coorp', cleaned, re.IGNORECASE):
+                return cleaned, 0.85
 
     # Pattern 6: PBS without region - just "Positive Behavior Support(s) Corporation"
     # (some providers don't have a region suffix)
