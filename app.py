@@ -277,9 +277,19 @@ if uploaded_file is not None:
 
     st.markdown("---")
 
-    # Show processing spinner
-    with st.spinner("Processing PDF... This may take 2-3 minutes for field extraction..."):
-        result = process_pdf(temp_path)
+    # Check if we already processed this file (avoid re-processing on button clicks)
+    file_key = f"{uploaded_file.name}_{uploaded_file.size}"
+
+    if 'processed_file_key' not in st.session_state or st.session_state.processed_file_key != file_key:
+        # New file - process it
+        with st.spinner("Processing PDF... This may take 2-3 minutes for field extraction..."):
+            result = process_pdf(temp_path)
+        # Cache the result
+        st.session_state.processed_file_key = file_key
+        st.session_state.cached_result = result
+    else:
+        # Same file - use cached result
+        result = st.session_state.cached_result
 
     # Processing complete - show results header
     st.subheader(f"Results for: {uploaded_file.name}")
@@ -344,7 +354,8 @@ if uploaded_file is not None:
             data=result['html_output'],
             file_name=html_filename,
             mime="text/html",
-            help="Download the enhanced HTML report with dropdown templates and bulk rejection text box"
+            help="Download the enhanced HTML report with dropdown templates and bulk rejection text box",
+            key="download_html_report"
         )
 
         # Preview HTML in expandable section
