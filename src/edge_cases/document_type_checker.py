@@ -46,10 +46,19 @@ class DocumentTypeChecker:
     """
 
     # Required markers that should appear in a valid CAQH Data Summary
+    # Note: "Data Summary" may not appear in browser-printed exports, so we have alternatives
     REQUIRED_MARKERS = [
         ("CAQH", "CAQH reference or branding"),
-        ("Data Summary", "Data Summary title"),
         ("Provider", "Provider information section"),
+    ]
+
+    # Alternative markers for "Data Summary" - if ANY of these are present, document is valid
+    # This handles browser-printed CAQH exports that don't have "Data Summary" title
+    ALTERNATIVE_DATA_SUMMARY_MARKERS = [
+        "Data Summary",           # Standard CAQH export
+        "CAQH Provider ID",       # Browser-printed format (e.g., "Provider CAQH ID 16624351")
+        "Attestation Date",       # Browser-printed format header
+        "CAQH Data Summary Date", # Some exports have this variant
     ]
 
     # At least 2 of these sections should be present
@@ -133,10 +142,22 @@ class DocumentTypeChecker:
         text_lower = text.lower()
         missing_markers = []
 
-        # Check required markers
+        # Check required markers (CAQH, Provider)
         for marker, description in self.REQUIRED_MARKERS:
             if marker.lower() not in text_lower:
                 missing_markers.append(description)
+
+        # Check for Data Summary OR alternative markers
+        # Browser-printed CAQH exports may not have "Data Summary" but will have
+        # "CAQH Provider ID" or "Attestation Date" in the header
+        has_data_summary_marker = False
+        for alt_marker in self.ALTERNATIVE_DATA_SUMMARY_MARKERS:
+            if alt_marker.lower() in text_lower:
+                has_data_summary_marker = True
+                break
+
+        if not has_data_summary_marker:
+            missing_markers.append("Data Summary title (or CAQH Provider ID/Attestation Date)")
 
         if missing_markers:
             return DocumentTypeResult(

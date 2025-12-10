@@ -402,6 +402,87 @@ def extract_insurance_fields(text: str) -> dict:
     return selected_policy
 
 
+def _extract_date_near_label(
+    text: str,
+    label_variants: List[str],
+    exclude_labels: List[str] = None,
+    search_distance: int = 100
+) -> Optional[str]:
+    """
+    Extract a date near a label, handling multiline OCR formatting.
+
+    OCR often splits labels across lines, e.g.:
+    - "Current  11/01/2026\\nExpiration Date :" (value BEFORE label)
+    - "Current Effective Date :\\n01/31/2025" (value AFTER label)
+
+    This function searches both before and after the label for dates.
+
+    Args:
+        text: Text to search in
+        label_variants: List of label variations to search for (in priority order)
+        exclude_labels: Labels that indicate we found the WRONG date
+        search_distance: How far before/after the label to search
+
+    Returns:
+        Extracted date string or None
+    """
+    if exclude_labels is None:
+        exclude_labels = []
+
+    date_pattern = r'\d{1,2}[/-]\d{1,2}[/-]\d{4}'
+
+    for label in label_variants:
+        # Find the label in text (case insensitive, flexible whitespace)
+        label_pattern = re.escape(label).replace(r'\ ', r'\s+')
+        label_match = re.search(label_pattern, text, re.IGNORECASE)
+
+        if not label_match:
+            continue
+
+        label_start = label_match.start()
+        label_end = label_match.end()
+
+        # Search AFTER label (traditional)
+        after_region = text[label_end:label_end + search_distance]
+        after_date_match = re.search(date_pattern, after_region)
+
+        # Search BEFORE label (handles OCR split where date appears before label)
+        before_start = max(0, label_start - search_distance)
+        before_region = text[before_start:label_start]
+        # Find the LAST date before the label (closest to label)
+        before_dates = list(re.finditer(date_pattern, before_region))
+
+        # Decide which date to use
+        candidates = []
+
+        if after_date_match:
+            after_date = after_date_match.group()
+            after_distance = after_date_match.start()
+            # Check if excluded label appears between label and date
+            between_text = after_region[:after_date_match.start()].lower()
+            is_excluded = any(excl.lower() in between_text for excl in exclude_labels)
+            if not is_excluded:
+                candidates.append((after_date, after_distance, 'after'))
+
+        if before_dates:
+            before_date_match = before_dates[-1]  # Last (closest) date before label
+            before_date = before_date_match.group()
+            before_distance = label_start - before_start - before_date_match.end()
+            # Check context - make sure we're not grabbing a date from a different field
+            between_text = before_region[before_date_match.end():].lower()
+            is_excluded = any(excl.lower() in between_text for excl in exclude_labels)
+            if not is_excluded:
+                candidates.append((before_date, before_distance, 'before'))
+
+        # Return the closest date (prefer after, but use before if much closer)
+        if candidates:
+            # Sort by distance, prefer 'after' for ties
+            candidates.sort(key=lambda x: (x[1], 0 if x[2] == 'after' else 1))
+            return candidates[0][0]
+
+    return None
+
+
 def _extract_single_policy(policy_text: str) -> dict:
     """
     Extract all fields from a single insurance policy.
@@ -435,21 +516,22 @@ def _extract_single_policy(policy_text: str) -> dict:
     else:
         extracted['insurance_covered_location'] = None
 
-    # Current Effective Date
-    eff_date_match = re.search(
-        r'Current\s+Effective\s+Date\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})',
+    # Current Effective Date - handle multiline OCR formatting
+    # OCR may split "Current Effective Date : 01/31/2025" across lines
+    extracted['insurance_current_effective_date'] = _extract_date_near_label(
         policy_text,
-        re.IGNORECASE
+        ['Current Effective Date', 'Current Effective', 'Effective Date'],
+        exclude_labels=['Original Effective', 'Expiration']
     )
-    extracted['insurance_current_effective_date'] = eff_date_match.group(1).strip() if eff_date_match else None
 
-    # Current Expiration Date
-    exp_date_match = re.search(
-        r'Current\s+Expiration\s+Date\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})',
+    # Current Expiration Date - handle multiline OCR formatting
+    # OCR may output: "Current  11/01/2026\nExpiration Date :"
+    # So we need to search BEFORE "Expiration Date" label as well as after
+    extracted['insurance_current_expiration_date'] = _extract_date_near_label(
         policy_text,
-        re.IGNORECASE
+        ['Current Expiration Date', 'Expiration Date', 'Current Expiration'],
+        exclude_labels=['Original', 'Effective Date']
     )
-    extracted['insurance_current_expiration_date'] = exp_date_match.group(1).strip() if exp_date_match else None
 
     # Carrier/Self Insured Name (may span multiple lines)
     # Due to OCR quirks, carrier name may appear BEFORE the label

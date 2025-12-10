@@ -170,15 +170,17 @@ professional_license_expiration_date:
       - "Expires"
       - "Exp Date"
     pattern: "\\d{1,2}/\\d{1,2}/\\d{4}|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}-\\d{1,2}-\\d{4}"
-    # Removed section restriction - "Expiration Date" appears in multiple sections (Professional License, Board Certification)
-    # section: "licensure"
-    max_distance: 60
+    # Re-enabled section restriction (Dec 9, 2025) - BUG #2 fix
+    # Without section isolation, we were extracting insurance expiration date (01/31/2026)
+    # instead of license expiration date (11/13/2025) in ARobertsonRejected
+    section: "professional_identification_numbers"
+    max_distance: 100  # Increased to handle multiline OCR formatting
     confidence_threshold: 0.90
     date_formats:
       - "%m/%d/%Y"  # 12/31/2025
       - "%Y-%m-%d"  # 2025-12-31
       - "%m-%d-%Y"  # 12-31-2025
-    notes: "Must parse and validate as future date, warn if <30 days"
+    notes: "Must parse and validate as future date, warn if <30 days. Section-isolated to avoid insurance dates."
 
 
 # ============================================================================
