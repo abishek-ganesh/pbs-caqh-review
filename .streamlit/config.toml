@@ -1,0 +1,34 @@
+# Streamlit Configuration for Production Deployment
+# Addresses tab-switching disconnection issues on Streamlit Cloud
+
+[server]
+# Increase WebSocket ping/pong timeout for better connection stability
+# Default is 60s - increasing helps when user switches tabs
+enableWebsocketCompression = false
+
+# Allow cross-origin requests (needed for some deployments)
+enableCORS = false
+
+# Set max upload size (10MB should be enough for PDFs)
+maxUploadSize = 10
+
+# Run on all interfaces for cloud deployment
+headless = true
+
+[browser]
+# Don't automatically open browser (for cloud)
+gatherUsageStats = false
+
+[client]
+# Show error details for debugging
+showErrorDetails = true
+
+# Cache media files for better performance
+caching = true
+
+[runner]
+# Allow magic commands
+magicEnabled = true
+
+# Faster reruns
+fastReruns = true

@@ -232,6 +232,9 @@ def extract_with_ocr(pdf_path: str) -> str:
     Uses Tesseract with layout analysis to preserve reading order
     in multi-column documents.
 
+    MEMORY OPTIMIZATION: Processes pages one at a time to avoid
+    loading all pages into memory at once (critical for Streamlit Cloud).
+
     Requires:
     - pytesseract Python package
     - tesseract-ocr system package
@@ -245,20 +248,39 @@ def extract_with_ocr(pdf_path: str) -> str:
     Raises:
         PDFReadError: If OCR fails or tesseract not available
     """
+    import gc  # Garbage collection for memory management
+
     if not TESSERACT_AVAILABLE:
         raise PDFReadError(
             "Tesseract OCR not available. Install pytesseract and tesseract-ocr."
         )
 
     try:
-        # Convert PDF pages to images at higher DPI for better OCR
-        images = pdf2image.convert_from_path(pdf_path, dpi=300)
+        # Get total page count first (lightweight operation)
+        from PyPDF2 import PdfReader
+        with open(pdf_path, 'rb') as f:
+            page_count = len(PdfReader(f).pages)
 
         text_parts = []
-        for page_num, image in enumerate(images, start=1):
+
+        # Process ONE PAGE AT A TIME to minimize memory usage
+        # This is critical for Streamlit Cloud's 1GB memory limit
+        for page_num in range(1, page_count + 1):
+            # Convert single page to image (200 DPI is sufficient for OCR, saves ~44% memory vs 300 DPI)
+            images = pdf2image.convert_from_path(
+                pdf_path,
+                dpi=200,  # Reduced from 300 for memory efficiency
+                first_page=page_num,
+                last_page=page_num
+            )
+
+            if not images:
+                continue
+
+            image = images[0]  # Single page
+
             # Configure Tesseract for form documents
             # PSM 6 = Assume uniform block of text (good for forms)
-            # PSM 4 = Assume single column of text (alternative)
             custom_config = r'--oem 3 --psm 6'
 
             # Use Tesseract with TSV output to get word coordinates
@@ -350,6 +372,14 @@ def extract_with_ocr(pdf_path: str) -> str:
             if page_lines:
                 text_parts.append(f"\n--- Page {page_num} (OCR) ---\n")
                 text_parts.append("\n".join(page_lines))
+
+            # CRITICAL: Clean up memory after each page
+            # This prevents memory accumulation on Streamlit Cloud
+            del image
+            del images
+            del tsv_data
+            del rows
+            gc.collect()
 
         return "".join(text_parts)
 

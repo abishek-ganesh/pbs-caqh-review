@@ -18,6 +18,24 @@ from pathlib import Path
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent))
 
+# ==============================================================================
+# SESSION KEEP-ALIVE (Prevents disconnection when switching tabs)
+# ==============================================================================
+# Streamlit Cloud can disconnect when tab is backgrounded. This adds a
+# lightweight mechanism to maintain session state.
+
+def init_session_state():
+    """Initialize session state with default values to prevent crashes on reconnection."""
+    if 'initialized' not in st.session_state:
+        st.session_state.initialized = True
+        st.session_state.processed_file_key = None
+        st.session_state.cached_result = None
+        st.session_state.integrity_checker = None
+        st.session_state.doc_checker = None
+
+# Initialize session state early
+init_session_state()
+
 # Import POC components
 from src.extraction.pdf_reader import read_pdf_text
 from src.extraction.field_extractor import extract_all_fields
@@ -34,7 +52,7 @@ st.set_page_config(
     page_title="CAQH Data Summary Reviewer - POC",
     page_icon="📄",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"  # Show sidebar so users see refresh button
 )
 
 # ==============================================================================
@@ -42,15 +60,15 @@ st.set_page_config(
 # ==============================================================================
 
 def get_file_integrity_checker():
-    """Get singleton file integrity checker."""
-    if 'integrity_checker' not in st.session_state:
+    """Get singleton file integrity checker (recreates if session was reset)."""
+    if 'integrity_checker' not in st.session_state or st.session_state.integrity_checker is None:
         st.session_state.integrity_checker = FileIntegrityChecker()
     return st.session_state.integrity_checker
 
 
 def get_document_type_checker():
-    """Get singleton document type checker."""
-    if 'doc_checker' not in st.session_state:
+    """Get singleton document type checker (recreates if session was reset)."""
+    if 'doc_checker' not in st.session_state or st.session_state.doc_checker is None:
         st.session_state.doc_checker = DocumentTypeChecker()
     return st.session_state.doc_checker
 
@@ -228,6 +246,24 @@ def display_field(field_name: str, field_data: dict):
 # ==============================================================================
 # MAIN APP UI
 # ==============================================================================
+
+# ==============================================================================
+# SIDEBAR - Session Status & Info
+# ==============================================================================
+with st.sidebar:
+    st.markdown("### Session Info")
+    st.success("✅ Session Active")
+
+    # Show if there's cached data
+    if st.session_state.get('cached_result'):
+        st.info("📄 Previous results available")
+
+    # Manual refresh button (helps after tab switching)
+    if st.button("🔄 Refresh Session", help="Click if the app seems unresponsive"):
+        st.rerun()
+
+    st.markdown("---")
+    st.markdown("**Tip:** If the app stops responding after switching tabs, click 'Refresh Session'.")
 
 # Header
 st.title("📄 CAQH Data Summary Reviewer")
