@@ -23,9 +23,6 @@ gatherUsageStats = false
 # Show error details for debugging
 showErrorDetails = true
 
-# Cache media files for better performance
-caching = true
-
 [runner]
 # Allow magic commands
 magicEnabled = true
