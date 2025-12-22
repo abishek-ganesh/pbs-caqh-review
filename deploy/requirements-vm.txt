@@ -1,0 +1,52 @@
+# CAQH Data Summary Review - VM Production Dependencies
+# Minimal set of dependencies for the cron runner on PBSAAJWN01
+# Last Updated: December 22, 2025
+
+# ==============================================================================
+# CORE - Required for cron runner
+# ==============================================================================
+
+# HTTP requests for PBS Enterprise API
+requests>=2.28.0
+
+# PDF text extraction
+PyPDF2>=3.0.0
+pdfplumber>=0.9.0
+
+# OCR for scanned PDFs
+pytesseract>=0.3.10
+Pillow>=9.0.0
+
+# PDF to image conversion (for OCR)
+pdf2image>=1.16.0
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# Data validation
+pydantic>=2.0.0
+
+# YAML config parsing
+PyYAML>=6.0.0
+
+# Date handling
+python-dateutil>=2.8.0
+
+# ==============================================================================
+# INSTALLATION NOTES
+# ==============================================================================
+
+# System dependencies required (install before pip):
+#
+# Ubuntu/Debian:
+#   sudo apt-get update
+#   sudo apt-get install -y tesseract-ocr poppler-utils python3-pip
+#
+# RHEL/CentOS:
+#   sudo yum install -y tesseract poppler-utils python3-pip
+#
+# Verify Tesseract:
+#   tesseract --version
+#
+# Install Python packages:
+#   pip3 install -r requirements-vm.txt

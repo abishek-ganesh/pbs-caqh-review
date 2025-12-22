@@ -1,17 +1,52 @@
 """
 SharePoint Integration Module
 
-Handles all SharePoint operations including reading submissions,
-updating records, and triggering email workflows.
+Handles all SharePoint operations through the PBS Enterprise API middleware.
+This module provides the interface between our CAQH extraction tool and
+SharePoint on-premises.
 
 Components:
-- client.py: SharePoint API client
-- list_manager.py: CAQH Data Summary list operations
-- status_updater.py: Updates Approval Status and Rejection Reason fields
-- submission_reader.py: Reads new/unreviewed submissions
+- pbs_api_client.py: PBS Enterprise API client (primary integration point)
+
+Usage:
+    from src.sharepoint import PBSEnterpriseClient, create_client_from_env
+
+    # Option 1: Create client with explicit credentials
+    client = PBSEnterpriseClient(
+        base_url="https://api.teampbs.com",
+        access_token="your-token",
+        site_url="https://sharepoint.teampbs.com/CAQH%20Data%20Summary",
+        library_name="CAQH library Test"
+    )
+
+    # Option 2: Create client from environment variables
+    client = create_client_from_env()
+
+    # Get unprocessed items
+    items = client.get_unprocessed_items()
+
+    # Mark as processed with HTML report
+    client.mark_as_processed(item_id=123, html_report="<html>...</html>")
+
+API Documentation:
+    - Full API docs: docs/meeting-notes/2025-12-19_api_vm_updates.md
+    - Postman collection: docs/PBS Enterprise APIs - CAQH Library Test.postman_collection.json
 """
 
-from .client import SharePointClient
-from .list_manager import CAQHListManager
+from .pbs_api_client import (
+    PBSEnterpriseClient,
+    PBSEnterpriseClientError,
+    AuthenticationError,
+    APIError,
+    SharePointItem,
+    create_client_from_env
+)
 
-__all__ = ["SharePointClient", "CAQHListManager"]
+__all__ = [
+    "PBSEnterpriseClient",
+    "PBSEnterpriseClientError",
+    "AuthenticationError",
+    "APIError",
+    "SharePointItem",
+    "create_client_from_env"
+]
