@@ -45,14 +45,14 @@ medicaid_id:
       - "Medicaid Number"
       - "Medicaid ID"
       - "Medicaid Provider ID"
-    pattern: "\\d{8,12}"  # 8-12 digit number
+    pattern: "[A-Z]?\\d{6,12}"  # Alphanumeric: Q094409 (TN), or numeric: 105579200
     pattern_required: true  # MUST match pattern - no line-based fallback for text values
     # BUG #3 FIX: Must extract from Professional Identification Numbers section ONLY
     # Do NOT extract from Practice Locations > Group Medicaid Number
     section: "professional_identification_numbers"
     max_distance: 50
     confidence_threshold: 0.85
-    notes: "Medicaid ID format varies by state but typically 8-12 digits. Individual Medicaid ID must be in Professional Identification Numbers section, NOT Practice Locations (Group Medicaid)."
+    notes: "Medicaid ID format varies by state. Tennessee uses Q + 6 digits (e.g., Q094409). Other states use 8-12 digits. Individual Medicaid ID must be in Professional Identification Numbers section, NOT Practice Locations (Group Medicaid)."
 
 
 ssn:
@@ -198,14 +198,18 @@ first_name:
   field_category: "provider_identification"
   extraction:
     labels:
+      # Use the most specific label with colon for accuracy
+      - "First Name :"
+      - "First Name:"
       - "First Name"
-      - "Given Name"
-      - "Legal First Name"
-    pattern: "[A-Za-z][A-Za-z\\s'-]{1,49}"
+    # Pattern: Match single word names (case-insensitive start to handle OCR lowercase)
+    # Uses lookahead to stop before "Middle Name" which typically follows
+    # OCR often returns lowercase names like "ana" instead of "Ana"
+    pattern: "[A-Za-z][a-zA-Z'-]{1,24}(?=\\s+Middle|\\s{2,}|$)"
     section: "provider_information"
-    max_distance: 40
+    max_distance: 25
     confidence_threshold: 0.90
-    notes: "May include hyphens, apostrophes, and spaces (e.g., Mary-Jane, O'Connor)"
+    notes: "Single word name. Uses lookahead to stop before Middle Name. Case-insensitive start for OCR."
 
 last_name:
   required: true
@@ -216,15 +220,77 @@ last_name:
   field_category: "provider_identification"
   extraction:
     labels:
+      # Use the most specific label with colon for accuracy
+      - "Last Name :"
+      - "Last Name:"
       - "Last Name"
-      - "Family Name"
-      - "Surname"
-      - "Legal Last Name"
-    pattern: "[A-Za-z][A-Za-z\\s'-]{1,49}"
+    # Pattern: Match names with minimum 3 characters to exclude "No", "Have", etc.
+    # Uses lookahead requiring Suffix label, newline, or double-space + uppercase
+    # This pattern matches names BEFORE the label (OCR format places value on prior line)
+    pattern: "[A-Za-z][a-zA-Z'-]{2,24}(?=\\s+Suffix|\\s*\\n|\\s{2,}[A-Z]|$)"
     section: "provider_information"
-    max_distance: 40
+    max_distance: 30
     confidence_threshold: 0.90
-    notes: "May include hyphens, apostrophes, and spaces (e.g., Smith-Jones, O'Brien)"
+    notes: "3+ char name. Value often appears BEFORE label in OCR. Lookahead for Suffix/newline context."
+
+middle_name:
+  required: false  # Middle name is optional
+  validation_type: "text_presence"
+  min_length: 1
+  max_length: 50
+  error_message: "Middle Name must be 1-50 characters if provided"
+  field_category: "provider_identification"
+  extraction:
+    labels:
+      - "Middle Name :"
+      - "Middle Name:"
+      - "Middle Name"
+    # Pattern: Match middle names - single words or initials
+    # Middle names can be full names (Elizabeth, Angelique) or initials (R, J)
+    # Stop before "Last Name" which typically follows
+    pattern: "[A-Za-z][a-zA-Z'-]{0,24}(?=\\s+Last|\\s*\\n|\\s{2,}|$)"
+    section: "provider_information"
+    max_distance: 30
+    confidence_threshold: 0.85
+    notes: "Middle name is optional. May be full name or initial. Empty for many providers."
+
+suffix:
+  required: false  # Suffix is optional
+  validation_type: "enum"
+  allowed_values: ["Jr.", "Sr.", "II", "III", "IV", "V", "Jr", "Sr", "MD", "PhD", "DO", ""]
+  error_message: "Suffix must be a valid name suffix (Jr., Sr., II, III, etc.) if provided"
+  field_category: "provider_identification"
+  extraction:
+    labels:
+      - "Suffix :"
+      - "Suffix:"
+      - "Suffix"
+    # Pattern: Match common name suffixes
+    # Jr., Sr., II, III, IV, V, or professional suffixes like MD, PhD
+    pattern: "(?:Jr\\.?|Sr\\.?|II|III|IV|V|MD|PhD|DO)"
+    section: "provider_information"
+    max_distance: 20
+    confidence_threshold: 0.90
+    notes: "Name suffix is optional. Common values: Jr., Sr., II, III. Usually empty."
+
+caqh_number:
+  required: true  # CAQH ID is always present in Data Summary
+  validation_type: "format"
+  format_regex: "^\\d{8}$"
+  error_message: "CAQH Number must be exactly 8 digits"
+  field_category: "provider_identification"
+  extraction:
+    labels:
+      - "Provider CAQH ID"
+      - "CAQH Provider ID :"
+      - "CAQH Provider ID:"
+      - "CAQH ID"
+    # Pattern: 8-digit CAQH provider ID number
+    pattern: "\\d{8}"
+    section: "provider_information"
+    max_distance: 30
+    confidence_threshold: 0.95
+    notes: "CAQH Provider ID is an 8-digit number. Found in header and Personal Information section."
 
 date_of_birth:
   required: true
@@ -254,6 +320,7 @@ gender:
   required: true
   validation_type: "enum"
   allowed_values: ["Male", "Female", "M", "F"]
+  error_message: "Gender must be Male, Female, M, or F"
   field_category: "provider_identification"
   extraction:
     labels: ["Gender", "Sex"]
@@ -270,6 +337,7 @@ practice_location_address:
   field_category: "practice_location"
   extraction:
     labels:
+      - "Street 1"
       - "Address"
       - "Street Address"
       - "Location Address"
@@ -290,14 +358,17 @@ practice_location_city:
   field_category: "practice_location"
   extraction:
     labels:
+      - "City:"
       - "City"
-      - "Practice City"
-      - "Location City"
-    pattern: "[A-Za-z][A-Za-z \\-']{1,49}"
+    # Pattern: Match city names stopping before 2-letter state code or State label
+    # Uses non-greedy match ending with a letter, then lookahead for state/newline
+    # This ensures trailing spaces are not included in the city name
+    # Handles: "Jacksonville  FL", "Boca Raton  State", "West Palm Beach  FL"
+    pattern: "[A-Za-z][A-Za-z \\-']*?[A-Za-z](?=\\s+[A-Z]{2}\\b|\\s+State|\\n|$)"
     section: "practice_locations"
-    max_distance: 40
+    max_distance: 30
     confidence_threshold: 0.90
-    notes: "City name - may include spaces, hyphens, or apostrophes"
+    notes: "City name - non-greedy pattern ensures it stops before state code (FL, GA, etc.) or 'State' label."
 
 practice_location_state:
   required: true
@@ -307,14 +378,18 @@ practice_location_state:
   field_category: "practice_location"
   extraction:
     labels:
+      # More specific label to find state that follows a city name
+      # In OCR: "City:  Venice  State  FL" or "State :  FL"
+      - "State :"
+      - "State:"
       - "State"
-      - "ST"
-      - "Practice State"
-    pattern: "[A-Z]{2}"
+    # Pattern: Match only valid US state codes (explicit list for accuracy)
+    pattern: "\\b(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC)\\b"
     section: "practice_locations"
-    max_distance: 30
+    max_distance: 15
+    stop_pattern: "County|Province|Zip|ZIP|Country"
     confidence_threshold: 0.95
-    notes: "2-letter US state abbreviation (e.g., CA, NY, TX)"
+    notes: "2-letter US state code using explicit list. Reduced max_distance to prevent over-capture."
 
 practice_location_zip:
   required: true
@@ -324,16 +399,17 @@ practice_location_zip:
   field_category: "practice_location"
   extraction:
     labels:
+      # More specific labels first to avoid matching partial labels
+      - "Zip Code"
+      - "ZIP Code"
+      - "Postal Code"
       - "Zip"
       - "ZIP"
-      - "Zip Code"
-      - "Postal Code"
-      - "ZIP Code"
     pattern: "\\d{5}(-\\d{4})?"
     section: "practice_locations"
-    max_distance: 40
+    max_distance: 60
     confidence_threshold: 0.95
-    notes: "5-digit or 9-digit ZIP code (XXXXX or XXXXX-XXXX)"
+    notes: "5-digit or 9-digit ZIP code (XXXXX or XXXXX-XXXX). Increased max_distance to handle OCR line splits."
 
 practice_location_phone:
   required: true
@@ -343,16 +419,19 @@ practice_location_phone:
   field_category: "practice_location"
   extraction:
     labels:
+      # Priority order matters - Appointment Phone is the correct field for PBS
+      - "Appointment Phone Number"
+      - "Appointment Phone"
+      - "Phone Number"
       - "Phone"
       - "Telephone"
-      - "Phone Number"
       - "Tel"
       - "Contact Phone"
     pattern: "\\d{3}-\\d{3}-\\d{4}|\\(\\d{3}\\) \\d{3}-\\d{4}|\\d{10}"
     section: "practice_locations"
     max_distance: 50
     confidence_threshold: 0.90
-    notes: "US phone number - accepts XXX-XXX-XXXX, (XXX) XXX-XXXX, or XXXXXXXXXX"
+    notes: "US phone number - PBS uses Appointment Phone Number field. Accepts XXX-XXX-XXXX, (XXX) XXX-XXXX, or XXXXXXXXXX"
 
 practice_location_email:
   required: false
@@ -362,23 +441,25 @@ practice_location_email:
   field_category: "practice_location"
   extraction:
     labels:
-      - "Email"
+      # More specific label - look for "Email Address" first to avoid other Email fields
       - "Email Address"
-      - "E-mail"
-      - "Contact Email"
-      - "Practice Email"
-    pattern: "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+      - "Email Address :"
+    # Pattern: Match email addresses - the @ symbol is required
+    # This prevents matching random text like "Can general correspondence b"
+    pattern: "[a-zA-Z0-9][a-zA-Z0-9._%+-]{0,63}@[a-zA-Z0-9][a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+    pattern_required: true
     section: "practice_locations"
-    max_distance: 60
+    max_distance: 50
+    stop_pattern: "Can general|Practice Location Website|Appointment|Mailing Address"
     confidence_threshold: 0.95
-    notes: "Optional field - standard email format (user@domain.com)"
+    notes: "Email pattern requires @ symbol. pattern_required=true prevents fallback to non-email text. OCR may drop characters (e.g., 'rrpinero' -> 'Pinero')."
 
 professional_license_number:
   required: true
   validation_type: "text_presence"
-  min_length: 5
+  min_length: 3
   max_length: 20
-  error_message: "Professional License Number is required and must be 5-20 characters"
+  error_message: "Professional License Number is required and must be 3-20 characters"
   field_category: "licensure"
   extraction:
     labels:
@@ -387,11 +468,14 @@ professional_license_number:
       - "Professional License Number"
       - "State License Number"
       - "License No"
-    pattern: "[A-Z0-9]{5,20}"
-    section: "licensure"
-    max_distance: 60
+    # Pattern: Must contain at least one digit, alphanumeric with hyphens/dots
+    # Uses lookahead to stop before "License Type" or "ABA" which often follows
+    # Examples: 1-10-7137, LBA0000000199, COBA.01091, 1537
+    pattern: "[A-Z0-9](?:[A-Z0-9\\-\\.])*(?:\\d)[A-Z0-9\\-\\.]*(?=\\s+License|\\s+ABA|\\s*$)"
+    section: "professional_identification_numbers"
+    max_distance: 50
     confidence_threshold: 0.90
-    notes: "Alphanumeric license number format varies by state. May include hyphens or special characters."
+    notes: "License number must contain digit. Lookahead stops before 'License Type' or 'ABA'."
 
 
 # ============================================================================
@@ -543,44 +627,1028 @@ insurance_carrier_name:
       with the furthest away expiration. Must match PBS policy exactly.
 
 
-# Priority 2: Insurance address fields (6 fields - Week 5)
-# To be implemented after Priority 1 fields are tested
+# ============================================================================
+# SPECIALTY FIELDS (2 fields - Phase 4)
+# ============================================================================
 
-# insurance_address_street_1:
-#   required: true
-#   validation_type: "text_presence"
-#   field_category: "professional_liability_insurance"
-#   # Implementation pending Week 5
+# These fields capture primary and secondary specialty from the SPECIALTY INFORMATION section
+# For ABA providers, primary specialty is typically "Behavior Analyst (103K00000X)"
 
-# insurance_address_street_2:
-#   required: false
-#   validation_type: "text_presence"
-#   field_category: "professional_liability_insurance"
-#   # Implementation pending Week 5
+primary_specialty:
+  # Validation
+  required: true
+  validation_type: "text_presence"
+  min_length: 5
+  max_length: 100
+  error_message: "Primary Specialty is required and must be 5-100 characters"
+  critical: true
+  field_category: "specialty_information"
 
-# insurance_address_city:
-#   required: true
-#   validation_type: "text_presence"
-#   field_category: "professional_liability_insurance"
-#   # Implementation pending Week 5
+  # Extraction
+  extraction:
+    labels:
+      - "Primary Specialty"
+      - "Primary Specialty:"
+      - "Specialty"
+    # Pattern matches specialty name with taxonomy code in parentheses
+    # Example: "Behavior Analyst (103K00000X)"
+    pattern: "[A-Za-z][A-Za-z\\s]+\\s*\\([A-Z0-9]+\\)"
+    section: "specialty_information"
+    max_distance: 100
+    confidence_threshold: 0.90
+    notes: |
+      Primary specialty from SPECIALTY INFORMATION section.
+      For ABA providers, this is typically "Behavior Analyst (103K00000X)".
+      Format includes specialty name followed by taxonomy code in parentheses.
 
-# insurance_address_state:
-#   required: false
-#   validation_type: "enum"
-#   field_category: "professional_liability_insurance"
-#   # Implementation pending Week 5
+secondary_specialty:
+  # Validation
+  required: false  # Secondary specialty is optional
+  validation_type: "text_presence"
+  min_length: 5
+  max_length: 100
+  error_message: "Secondary Specialty must be 5-100 characters if provided"
+  critical: false
+  field_category: "specialty_information"
 
-# insurance_address_country:
-#   required: false
-#   validation_type: "text_presence"
-#   field_category: "professional_liability_insurance"
-#   # Implementation pending Week 5
+  # Extraction
+  extraction:
+    labels:
+      - "Sub/Secondary Specialty"
+      - "Secondary Specialty"
+      - "Sub-Specialty"
+    # Pattern matches specialty name with taxonomy code in parentheses
+    # Example: "Behavior Technician (106S00000X)"
+    pattern: "[A-Za-z][A-Za-z\\s]+\\s*\\([A-Z0-9]+\\)"
+    section: "specialty_information"
+    max_distance: 100
+    confidence_threshold: 0.90
+    notes: |
+      Secondary specialty from SPECIALTY INFORMATION section.
+      Only present if provider answered "Yes" to "Do you have a Secondary Specialty?"
+      Example: "Behavior Technician (106S00000X)" or "Assistant Behavior Analyst (106E00000X)".
 
-# insurance_address_zip:
-#   required: false
-#   validation_type: "format"
-#   field_category: "professional_liability_insurance"
-#   # Implementation pending Week 5
+
+# ============================================================================
+# CERTIFICATION/BOARD FIELDS (4 fields - Phase 4)
+# ============================================================================
+
+# These fields capture board certification details from the SPECIALTY INFORMATION section
+# Common board for ABA providers is BACB (Behavior Analyst Certification Board)
+
+board_certified:
+  # Validation
+  required: true
+  validation_type: "enum"
+  allowed_values: ["Yes", "No", "Y", "N"]
+  error_message: "Board Certified must be Yes or No"
+  critical: true
+  field_category: "specialty_certification"
+
+  # Extraction
+  extraction:
+    labels:
+      - "Board Certified?"
+      - "Board Certified"
+      - "Is Board Certified"
+    pattern: "Yes|No|Y|N"
+    section: "specialty_information"
+    max_distance: 20
+    confidence_threshold: 0.95
+    notes: |
+      Board certification status from SPECIALTY INFORMATION section.
+      For ABA providers, this indicates if they are board certified by BACB.
+
+certifying_board_name:
+  # Validation
+  required: false  # Base requirement - conditionally required based on board_certified
+  conditional_required:
+    depends_on: "board_certified"
+    when_value: ["Yes", "Y"]
+  validation_type: "text_presence"
+  min_length: 3
+  max_length: 100
+  error_message: "Certifying Board Name is required when Board Certified is Yes"
+  critical: true  # Critical when board_certified=Yes
+  field_category: "specialty_certification"
+
+  # Extraction
+  extraction:
+    labels:
+      - "Name of Certifying Board"
+      - "Certifying Board"
+      - "Board Name"
+    # Pattern matches common board names, especially BACB full name
+    # OCR often splits "Behavior Analyst Certification Board" across lines
+    pattern: "Behavior\\s+Analyst\\s+Certification\\s*(?:Board)?|BACB|[A-Za-z][A-Za-z\\s]{3,80}"
+    section: "specialty_information"
+    max_distance: 100
+    confidence_threshold: 0.85
+    notes: |
+      Name of the certifying board from SPECIALTY INFORMATION section.
+      For ABA providers, this is typically "Behavior Analyst Certification Board" (BACB).
+      OCR often splits the name across multiple lines.
+
+initial_certification_date:
+  # Validation
+  required: false  # Base requirement - conditionally required based on board_certified
+  conditional_required:
+    depends_on: "board_certified"
+    when_value: ["Yes", "Y"]
+  validation_type: "date"
+  must_be_past: true
+  error_message: "Initial Certification Date is required when Board Certified is Yes"
+  critical: true  # Critical when board_certified=Yes
+  field_category: "specialty_certification"
+
+  # Extraction
+  extraction:
+    labels:
+      - "Initial Certification Date"
+      - "Initial Cert Date"
+      - "Original Certification Date"
+      - "First Certification Date"
+    pattern: "\\d{1,2}/\\d{1,2}/\\d{4}|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}-\\d{1,2}-\\d{4}"
+    section: "specialty_information"
+    max_distance: 50
+    confidence_threshold: 0.90
+    date_formats:
+      - "%m/%d/%Y"  # 01/15/2020
+      - "%Y-%m-%d"  # 2020-01-15
+      - "%m-%d-%Y"  # 01-15-2020
+    notes: |
+      Date when provider was first certified by the board.
+      From SPECIALTY INFORMATION section.
+
+certification_expiration_date:
+  # Validation
+  required: false  # Base requirement - conditionally required based on board_certified
+  conditional_required:
+    depends_on: "board_certified"
+    when_value: ["Yes", "Y"]
+  validation_type: "date"
+  must_be_future: true
+  warn_if_expires_within_days: 30
+  error_message: "Certification Expiration Date is required when Board Certified is Yes and must be a future date"
+  critical: true  # Critical when board_certified=Yes
+  field_category: "specialty_certification"
+
+  # Extraction
+  extraction:
+    labels:
+      - "Expiration Date"
+      - "Certification Expiration Date"
+      - "Cert Expiration Date"
+      - "Expires"
+    pattern: "\\d{1,2}/\\d{1,2}/\\d{4}|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}-\\d{1,2}-\\d{4}"
+    section: "specialty_information"
+    max_distance: 50
+    confidence_threshold: 0.90
+    date_formats:
+      - "%m/%d/%Y"  # 12/31/2026
+      - "%Y-%m-%d"  # 2026-12-31
+      - "%m-%d-%Y"  # 12-31-2026
+    notes: |
+      Certification expiration date from SPECIALTY INFORMATION section.
+      This is the board certification expiration (not license expiration).
+      Warn if expiring within 30 days.
+
+
+# ============================================================================
+# EDUCATION FIELDS (Phase 4 - Field Expansion)
+# ============================================================================
+
+# Education fields for ABA providers
+# Note: For ABA providers, "Professional School" refers to graduate/master's programs
+# not medical school. The field is named "professional_school_name" to match CAQH terminology.
+
+professional_school_name:
+  # Validation
+  required: false  # Not always required - some providers may have only undergraduate degrees
+  validation_type: "text_presence"
+  min_length: 3
+  max_length: 150
+  error_message: "Professional School Name should be 3-150 characters if provided"
+  critical: false
+  field_category: "education"
+
+  # Extraction
+  extraction:
+    labels:
+      - "Professional School"
+      - "Professional School :"
+      - "Graduate School"
+      - "Medical School"
+      - "Training Program"
+    # Pattern: Match school/university names - typically ends with University, College, School, Institute
+    # Examples: "Florida International University", "Penn State University", "George Mason University"
+    pattern: "[A-Za-z][A-Za-z \\-'&]+(?:University|College|School|Institute|Academy)"
+    pattern_required: false  # Fall back to line-based extraction if pattern doesn't match
+    section: "education"
+    max_distance: 150
+    confidence_threshold: 0.85
+    notes: |
+      Professional School for ABA providers is typically a Master's program.
+      Common formats: "Florida International University", "Penn State University"
+      For ABA providers, this is NOT medical school - it's the graduate school where they
+      obtained their Master's degree in Applied Behavior Analysis or related field.
+      Look for the FIRST Professional School Information section in EDUCATION.
+
+graduation_date:
+  # Validation
+  required: false  # Not always required - conditional on professional school being present
+  validation_type: "date"
+  must_be_past: true
+  error_message: "Graduation Date must be a valid past date"
+  critical: false
+  field_category: "education"
+
+  # Extraction
+  extraction:
+    labels:
+      - "Graduation Date"
+      - "Graduation Date :"
+      - "Date of Graduation"
+      - "Grad Date"
+    pattern: "\\d{1,2}/\\d{1,2}/\\d{4}|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}-\\d{1,2}-\\d{4}"
+    section: "education"
+    max_distance: 80
+    confidence_threshold: 0.90
+    date_formats:
+      - "%m/%d/%Y"  # 05/22/2025
+      - "%Y-%m-%d"  # 2025-05-22
+      - "%m-%d-%Y"  # 05-22-2025
+    notes: |
+      Graduation Date from the Professional School (graduate program).
+      Must be a past date. Format varies: MM/DD/YYYY or YYYY-MM-DD.
+      This corresponds to when the provider completed their graduate degree.
+      Look for the Graduation Date that appears AFTER "Did you complete your professional
+      education at this school? Yes" in the EDUCATION section.
+
+
+# Priority 2: Insurance address fields (6 fields + phone)
+# Enabled January 28, 2026
+
+insurance_address_street_1:
+  required: true
+  validation_type: "text_presence"
+  min_length: 5
+  max_length: 150
+  error_message: "Insurance Address Street 1 is required and must be 5-150 characters"
+  field_category: "professional_liability_insurance"
+  extraction:
+    labels:
+      - "Street 1:"
+      - "Street 1"
+      - "Address"
+    pattern: ".{5,150}"
+    section: "professional_liability_insurance"
+    max_distance: 100
+    confidence_threshold: 0.85
+    notes: "Insurance carrier street address from INSURANCE INFORMATION section"
+
+insurance_address_street_2:
+  required: false
+  validation_type: "text_presence"
+  min_length: 1
+  max_length: 150
+  error_message: "Insurance Address Street 2 must be 1-150 characters if provided"
+  field_category: "professional_liability_insurance"
+  extraction:
+    labels:
+      - "Street 2:"
+      - "Street 2"
+    pattern: ".{1,150}"
+    section: "professional_liability_insurance"
+    max_distance: 100
+    confidence_threshold: 0.85
+    notes: "Insurance carrier street address line 2 (optional)"
+
+insurance_address_city:
+  required: true
+  validation_type: "text_presence"
+  min_length: 2
+  max_length: 50
+  error_message: "Insurance Address City is required and must be 2-50 characters"
+  field_category: "professional_liability_insurance"
+  extraction:
+    labels:
+      - "City:"
+      - "City"
+    pattern: "[A-Za-z][A-Za-z \\-']*[A-Za-z]"
+    section: "professional_liability_insurance"
+    max_distance: 30
+    confidence_threshold: 0.90
+    notes: "Insurance carrier city from INSURANCE INFORMATION section"
+
+insurance_address_state:
+  required: true
+  validation_type: "enum"
+  allowed_values: ["AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "DC"]
+  error_message: "Insurance Address State must be a valid 2-letter US state code"
+  field_category: "professional_liability_insurance"
+  extraction:
+    labels:
+      - "State:"
+      - "State"
+    pattern: "\\b(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC)\\b"
+    section: "professional_liability_insurance"
+    max_distance: 20
+    confidence_threshold: 0.95
+    notes: "Insurance carrier state code from INSURANCE INFORMATION section"
+
+insurance_address_zip:
+  required: false
+  validation_type: "format"
+  format_regex: "^\\d{5}(-\\d{4})?$"
+  error_message: "Insurance Address ZIP must be in format XXXXX or XXXXX-XXXX"
+  field_category: "professional_liability_insurance"
+  extraction:
+    labels:
+      - "Zip Code:"
+      - "Zip Code"
+      - "ZIP"
+    pattern: "\\d{5}(-\\d{4})?"
+    section: "professional_liability_insurance"
+    max_distance: 30
+    confidence_threshold: 0.95
+    notes: "Insurance carrier ZIP code from INSURANCE INFORMATION section"
+
+insurance_address_country:
+  required: false
+  validation_type: "text_presence"
+  min_length: 2
+  max_length: 50
+  error_message: "Insurance Address Country must be 2-50 characters if provided"
+  field_category: "professional_liability_insurance"
+  extraction:
+    labels:
+      - "Country:"
+      - "Country"
+    pattern: ".{2,50}"
+    section: "professional_liability_insurance"
+    max_distance: 30
+    confidence_threshold: 0.85
+    notes: "Insurance carrier country (usually United States)"
+
+insurance_phone:
+  required: false
+  validation_type: "format"
+  format_regex: "^\\d{3}-\\d{3}-\\d{4}$|^\\(\\d{3}\\) \\d{3}-\\d{4}$|^\\d{10}$"
+  error_message: "Insurance Phone must be a valid US phone number"
+  field_category: "professional_liability_insurance"
+  extraction:
+    labels:
+      - "Phone Number:"
+      - "Phone Number"
+      - "Phone"
+    pattern: "\\d{3}-\\d{3}-\\d{4}|\\(\\d{3}\\) \\d{3}-\\d{4}|\\d{10}"
+    section: "professional_liability_insurance"
+    max_distance: 30
+    confidence_threshold: 0.90
+    notes: "Insurance carrier phone number"
+
+insurance_fax:
+  required: false
+  validation_type: "format"
+  format_regex: "^\\d{3}-\\d{3}-\\d{4}$|^\\(\\d{3}\\) \\d{3}-\\d{4}$|^\\d{10}$"
+  error_message: "Insurance Fax must be a valid US fax number"
+  field_category: "professional_liability_insurance"
+  extraction:
+    labels:
+      - "Fax Number:"
+      - "Fax Number"
+      - "Fax"
+    pattern: "\\d{3}-\\d{3}-\\d{4}|\\(\\d{3}\\) \\d{3}-\\d{4}|\\d{10}"
+    section: "professional_liability_insurance"
+    max_distance: 30
+    confidence_threshold: 0.90
+    notes: "Insurance carrier fax number"
+
+# Priority 1 Insurance Fields - Added February 13, 2026
+# Required per CAQH Cheat Sheet
+
+insurance_each_occurrence:
+  required: true
+  validation_type: "text_presence"
+  min_length: 1
+  max_length: 50
+  error_message: "Insurance Amount Per Occurrence is required (e.g., $1,000,000)"
+  critical: true
+  field_category: "professional_liability_insurance"
+  extraction:
+    labels:
+      - "Amount of coverage per occurrence"
+      - "Per Occurrence"
+      - "Each Occurrence"
+      - "Coverage per occurrence"
+      - "Per Claim"
+    # Pattern: Match dollar amounts like $1,000,000 or 1000000 or 1,000,000
+    pattern: "\\$?\\d{1,3}(?:,\\d{3})*(?:\\.\\d{2})?"
+    section: "professional_liability_insurance"
+    max_distance: 80
+    confidence_threshold: 0.90
+    notes: |
+      Coverage amount per occurrence/claim from Professional Liability Insurance section.
+      Common values: $1,000,000, $2,000,000. Required field per CAQH Cheat Sheet.
+
+insurance_general_aggregate:
+  required: true
+  validation_type: "text_presence"
+  min_length: 1
+  max_length: 50
+  error_message: "Insurance General Aggregate is required (e.g., $3,000,000)"
+  critical: true
+  field_category: "professional_liability_insurance"
+  extraction:
+    labels:
+      - "Amount of coverage aggregate"
+      - "General Aggregate"
+      - "Aggregate"
+      - "Coverage aggregate"
+      - "Total Coverage"
+    # Pattern: Match dollar amounts like $3,000,000 or 3000000 or 3,000,000
+    pattern: "\\$?\\d{1,3}(?:,\\d{3})*(?:\\.\\d{2})?"
+    section: "professional_liability_insurance"
+    max_distance: 80
+    confidence_threshold: 0.90
+    notes: |
+      Total aggregate coverage amount from Professional Liability Insurance section.
+      Common values: $3,000,000, $6,000,000. Required field per CAQH Cheat Sheet.
+
+insurance_individual_coverage:
+  required: true
+  validation_type: "enum"
+  allowed_values: ["Yes", "No", "Y", "N"]
+  error_message: "Insurance Individual Coverage must be Yes or No"
+  critical: true
+  field_category: "professional_liability_insurance"
+  extraction:
+    labels:
+      - "Individual Coverage"
+      - "Is this individual coverage"
+      - "Individual Policy"
+    pattern: "Yes|No|Y|N"
+    section: "professional_liability_insurance"
+    max_distance: 30
+    confidence_threshold: 0.95
+    notes: |
+      Whether this is individual coverage (vs group/employer coverage).
+      Required field per CAQH Cheat Sheet.
+
+insurance_self_insured:
+  required: true
+  validation_type: "enum"
+  allowed_values: ["Yes", "No", "Y", "N"]
+  error_message: "Insurance Self Insured must be Yes or No"
+  critical: true
+  field_category: "professional_liability_insurance"
+  extraction:
+    labels:
+      - "Self Insured"
+      - "Self-Insured"
+      - "Are you self insured"
+    pattern: "Yes|No|Y|N"
+    section: "professional_liability_insurance"
+    max_distance: 30
+    confidence_threshold: 0.95
+    notes: |
+      Whether the provider is self-insured.
+      Required field per CAQH Cheat Sheet.
+
+
+# ============================================================================
+# CREDENTIALING CONTACT FIELDS (Added January 28, 2026)
+# ============================================================================
+
+credentialing_contact_first_name:
+  required: false
+  validation_type: "text_presence"
+  min_length: 2
+  max_length: 50
+  error_message: "Credentialing Contact First Name must be 2-50 characters if provided"
+  field_category: "credentialing_contact"
+  extraction:
+    labels:
+      - "First Name :"
+      - "First Name:"
+      - "First Name"
+    pattern: "[A-Za-z][a-zA-Z'-]{1,24}"
+    section: "credentialing_information"
+    max_distance: 25
+    confidence_threshold: 0.90
+    notes: "Credentialing contact first name from CREDENTIALING INFORMATION section"
+
+credentialing_contact_last_name:
+  required: false
+  validation_type: "text_presence"
+  min_length: 2
+  max_length: 50
+  error_message: "Credentialing Contact Last Name must be 2-50 characters if provided"
+  field_category: "credentialing_contact"
+  extraction:
+    labels:
+      - "Last Name :"
+      - "Last Name:"
+      - "Last Name"
+    pattern: "[A-Za-z][a-zA-Z'-]{1,24}"
+    section: "credentialing_information"
+    max_distance: 25
+    confidence_threshold: 0.90
+    notes: "Credentialing contact last name from CREDENTIALING INFORMATION section"
+
+credentialing_contact_address:
+  required: false
+  validation_type: "text_presence"
+  min_length: 5
+  max_length: 150
+  error_message: "Credentialing Contact Address must be 5-150 characters if provided"
+  field_category: "credentialing_contact"
+  extraction:
+    labels:
+      - "Street 1:"
+      - "Street 1"
+    pattern: ".{5,150}"
+    section: "credentialing_information"
+    max_distance: 100
+    confidence_threshold: 0.85
+    notes: "Credentialing contact street address"
+
+credentialing_contact_city:
+  required: false
+  validation_type: "text_presence"
+  min_length: 2
+  max_length: 50
+  error_message: "Credentialing Contact City must be 2-50 characters if provided"
+  field_category: "credentialing_contact"
+  extraction:
+    labels:
+      - "City:"
+      - "City"
+    pattern: "[A-Za-z][A-Za-z \\-']*[A-Za-z]"
+    section: "credentialing_information"
+    max_distance: 30
+    confidence_threshold: 0.90
+    notes: "Credentialing contact city"
+
+credentialing_contact_state:
+  required: false
+  validation_type: "enum"
+  allowed_values: ["AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "DC"]
+  error_message: "Credentialing Contact State must be a valid 2-letter US state code"
+  field_category: "credentialing_contact"
+  extraction:
+    labels:
+      - "State:"
+      - "State"
+    pattern: "\\b(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC)\\b"
+    section: "credentialing_information"
+    max_distance: 15
+    confidence_threshold: 0.95
+    notes: "Credentialing contact state code"
+
+credentialing_contact_zip:
+  required: false
+  validation_type: "format"
+  format_regex: "^\\d{5}(-\\d{4})?$"
+  error_message: "Credentialing Contact ZIP must be in format XXXXX or XXXXX-XXXX"
+  field_category: "credentialing_contact"
+  extraction:
+    labels:
+      - "Zip Code:"
+      - "Zip Code"
+    pattern: "\\d{5}(-\\d{4})?"
+    section: "credentialing_information"
+    max_distance: 30
+    confidence_threshold: 0.95
+    notes: "Credentialing contact ZIP code"
+
+credentialing_contact_phone:
+  required: false
+  validation_type: "format"
+  format_regex: "^\\d{3}-\\d{3}-\\d{4}$|^\\(\\d{3}\\) \\d{3}-\\d{4}$|^\\d{10}$"
+  error_message: "Credentialing Contact Phone must be a valid US phone number"
+  field_category: "credentialing_contact"
+  extraction:
+    labels:
+      - "Phone Number:"
+      - "Phone Number"
+    pattern: "\\d{3}-\\d{3}-\\d{4}|\\(\\d{3}\\) \\d{3}-\\d{4}|\\d{10}"
+    section: "credentialing_information"
+    max_distance: 40
+    confidence_threshold: 0.90
+    notes: "Credentialing contact phone number"
+
+credentialing_contact_fax:
+  required: false
+  validation_type: "format"
+  format_regex: "^\\d{3}-\\d{3}-\\d{4}$|^\\(\\d{3}\\) \\d{3}-\\d{4}$|^\\d{10}$"
+  error_message: "Credentialing Contact Fax must be a valid US fax number"
+  field_category: "credentialing_contact"
+  extraction:
+    labels:
+      - "Fax Number:"
+      - "Fax Number"
+    pattern: "\\d{3}-\\d{3}-\\d{4}|\\(\\d{3}\\) \\d{3}-\\d{4}|\\d{10}"
+    section: "credentialing_information"
+    max_distance: 40
+    confidence_threshold: 0.90
+    notes: "Credentialing contact fax number"
+
+credentialing_contact_email:
+  required: false
+  validation_type: "format"
+  format_regex: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"
+  error_message: "Credentialing Contact Email must be a valid email address"
+  field_category: "credentialing_contact"
+  extraction:
+    labels:
+      - "Email Address:"
+      - "Email Address"
+    pattern: "[a-zA-Z0-9][a-zA-Z0-9._%+-]{0,63}@[a-zA-Z0-9][a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+    pattern_required: true
+    section: "credentialing_information"
+    max_distance: 50
+    confidence_threshold: 0.95
+    notes: "Credentialing contact email address"
+
+
+# ============================================================================
+# BILLING CONTACT FIELDS (Added January 28, 2026)
+# ============================================================================
+
+billing_contact_first_name:
+  required: false
+  validation_type: "text_presence"
+  min_length: 2
+  max_length: 50
+  error_message: "Billing Contact First Name must be 2-50 characters if provided"
+  field_category: "billing_contact"
+  extraction:
+    labels:
+      - "First Name :"
+      - "First Name:"
+      - "First Name"
+    pattern: "[A-Za-z][a-zA-Z'-]{1,24}"
+    section: "billing_contact"
+    max_distance: 25
+    confidence_threshold: 0.90
+    notes: "Billing contact first name from Billing Contact section in PRACTICE LOCATIONS"
+
+billing_contact_last_name:
+  required: false
+  validation_type: "text_presence"
+  min_length: 2
+  max_length: 50
+  error_message: "Billing Contact Last Name must be 2-50 characters if provided"
+  field_category: "billing_contact"
+  extraction:
+    labels:
+      - "Last Name :"
+      - "Last Name:"
+      - "Last Name"
+    pattern: "[A-Za-z][a-zA-Z'-]{1,24}"
+    section: "billing_contact"
+    max_distance: 25
+    confidence_threshold: 0.90
+    notes: "Billing contact last name from Billing Contact section"
+
+billing_contact_address:
+  required: false
+  validation_type: "text_presence"
+  min_length: 5
+  max_length: 150
+  error_message: "Billing Contact Address must be 5-150 characters if provided"
+  field_category: "billing_contact"
+  extraction:
+    labels:
+      - "Street 1:"
+      - "Street 1"
+    pattern: ".{5,150}"
+    section: "billing_contact"
+    max_distance: 100
+    confidence_threshold: 0.85
+    notes: "Billing contact street address"
+
+billing_contact_city:
+  required: false
+  validation_type: "text_presence"
+  min_length: 2
+  max_length: 50
+  error_message: "Billing Contact City must be 2-50 characters if provided"
+  field_category: "billing_contact"
+  extraction:
+    labels:
+      - "City:"
+      - "City"
+    pattern: "[A-Za-z][A-Za-z \\-']*[A-Za-z]"
+    section: "billing_contact"
+    max_distance: 30
+    confidence_threshold: 0.90
+    notes: "Billing contact city"
+
+billing_contact_state:
+  required: false
+  validation_type: "enum"
+  allowed_values: ["AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "DC"]
+  error_message: "Billing Contact State must be a valid 2-letter US state code"
+  field_category: "billing_contact"
+  extraction:
+    labels:
+      - "State:"
+      - "State"
+    pattern: "\\b(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC)\\b"
+    section: "billing_contact"
+    max_distance: 15
+    confidence_threshold: 0.95
+    notes: "Billing contact state code"
+
+billing_contact_zip:
+  required: false
+  validation_type: "format"
+  format_regex: "^\\d{5}(-\\d{4})?$"
+  error_message: "Billing Contact ZIP must be in format XXXXX or XXXXX-XXXX"
+  field_category: "billing_contact"
+  extraction:
+    labels:
+      - "Zip Code:"
+      - "Zip Code"
+    pattern: "\\d{5}(-\\d{4})?"
+    section: "billing_contact"
+    max_distance: 30
+    confidence_threshold: 0.95
+    notes: "Billing contact ZIP code"
+
+billing_contact_phone:
+  required: false
+  validation_type: "format"
+  format_regex: "^\\d{3}-\\d{3}-\\d{4}$|^\\(\\d{3}\\) \\d{3}-\\d{4}$|^\\d{10}$"
+  error_message: "Billing Contact Phone must be a valid US phone number"
+  field_category: "billing_contact"
+  extraction:
+    labels:
+      - "Phone Number:"
+      - "Phone Number"
+    pattern: "\\d{3}-\\d{3}-\\d{4}|\\(\\d{3}\\) \\d{3}-\\d{4}|\\d{10}"
+    section: "billing_contact"
+    max_distance: 40
+    confidence_threshold: 0.90
+    notes: "Billing contact phone number"
+
+billing_contact_fax:
+  required: false
+  validation_type: "format"
+  format_regex: "^\\d{3}-\\d{3}-\\d{4}$|^\\(\\d{3}\\) \\d{3}-\\d{4}$|^\\d{10}$"
+  error_message: "Billing Contact Fax must be a valid US fax number"
+  field_category: "billing_contact"
+  extraction:
+    labels:
+      - "Fax Number:"
+      - "Fax Number"
+    pattern: "\\d{3}-\\d{3}-\\d{4}|\\(\\d{3}\\) \\d{3}-\\d{4}|\\d{10}"
+    section: "billing_contact"
+    max_distance: 40
+    confidence_threshold: 0.90
+    notes: "Billing contact fax number"
+
+billing_contact_email:
+  required: false
+  validation_type: "format"
+  format_regex: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"
+  error_message: "Billing Contact Email must be a valid email address"
+  field_category: "billing_contact"
+  extraction:
+    labels:
+      - "E-mail Address:"
+      - "E-mail Address"
+      - "Email Address"
+    pattern: "[a-zA-Z0-9][a-zA-Z0-9._%+-]{0,63}@[a-zA-Z0-9][a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+    pattern_required: true
+    section: "billing_contact"
+    max_distance: 50
+    confidence_threshold: 0.95
+    notes: "Billing contact email address"
+
+
+# ============================================================================
+# DEMOGRAPHICS/PERSONAL FIELDS (Added January 28, 2026)
+# ============================================================================
+
+birth_city:
+  required: false
+  validation_type: "text_presence"
+  min_length: 2
+  max_length: 50
+  error_message: "Birth City must be 2-50 characters if provided"
+  field_category: "demographics"
+  extraction:
+    labels:
+      - "Birth City:"
+      - "Birth City"
+    pattern: "[A-Za-z][A-Za-z \\-']*[A-Za-z]"
+    section: "provider_information"
+    max_distance: 40
+    confidence_threshold: 0.90
+    notes: "City of birth from Demographics section"
+
+birth_state:
+  required: false
+  validation_type: "text_presence"
+  min_length: 2
+  max_length: 50
+  error_message: "Birth State must be 2-50 characters if provided"
+  field_category: "demographics"
+  extraction:
+    labels:
+      - "Birth State:"
+      - "Birth State"
+    pattern: "[A-Za-z]{2,50}"
+    section: "provider_information"
+    max_distance: 30
+    confidence_threshold: 0.90
+    notes: "State or province of birth"
+
+birth_country:
+  required: false
+  validation_type: "text_presence"
+  min_length: 2
+  max_length: 50
+  error_message: "Birth Country must be 2-50 characters if provided"
+  field_category: "demographics"
+  extraction:
+    labels:
+      - "Birth Country:"
+      - "Birth Country"
+    pattern: "[A-Za-z][A-Za-z \\-']*[A-Za-z]"
+    section: "provider_information"
+    max_distance: 40
+    confidence_threshold: 0.90
+    notes: "Country of birth"
+
+home_address_street:
+  required: false
+  validation_type: "text_presence"
+  min_length: 5
+  max_length: 150
+  error_message: "Home Address Street must be 5-150 characters if provided"
+  field_category: "demographics"
+  extraction:
+    labels:
+      - "Street 1:"
+      - "Street 1"
+    pattern: ".{5,150}"
+    section: "home_address"
+    max_distance: 100
+    confidence_threshold: 0.85
+    notes: "Home address street from PERSONAL INFORMATION section"
+
+home_address_city:
+  required: false
+  validation_type: "text_presence"
+  min_length: 2
+  max_length: 50
+  error_message: "Home Address City must be 2-50 characters if provided"
+  field_category: "demographics"
+  extraction:
+    labels:
+      - "City:"
+      - "City"
+    pattern: "[A-Za-z][A-Za-z \\-']*[A-Za-z]"
+    section: "home_address"
+    max_distance: 30
+    confidence_threshold: 0.90
+    notes: "Home address city"
+
+home_address_state:
+  required: false
+  validation_type: "enum"
+  allowed_values: ["AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "DC"]
+  error_message: "Home Address State must be a valid 2-letter US state code"
+  field_category: "demographics"
+  extraction:
+    labels:
+      - "State:"
+      - "State"
+    pattern: "\\b(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC)\\b"
+    section: "home_address"
+    max_distance: 15
+    confidence_threshold: 0.95
+    notes: "Home address state"
+
+home_address_zip:
+  required: false
+  validation_type: "format"
+  format_regex: "^\\d{5}(-\\d{4})?$"
+  error_message: "Home Address ZIP must be in format XXXXX or XXXXX-XXXX"
+  field_category: "demographics"
+  extraction:
+    labels:
+      - "Zip Code:"
+      - "Zip Code"
+    pattern: "\\d{5}(-\\d{4})?"
+    section: "home_address"
+    max_distance: 30
+    confidence_threshold: 0.95
+    notes: "Home address ZIP code"
+
+race_ethnicity:
+  required: false
+  validation_type: "text_presence"
+  min_length: 2
+  max_length: 100
+  error_message: "Race/Ethnicity must be 2-100 characters if provided"
+  field_category: "demographics"
+  extraction:
+    labels:
+      - "Race/Ethnicity:"
+      - "Race/Ethnicity"
+    pattern: "[A-Za-z][A-Za-z \\-',/]*[A-Za-z]"
+    section: "provider_information"
+    max_distance: 50
+    confidence_threshold: 0.85
+    notes: "Race/Ethnicity from Demographics section"
+
+
+# ============================================================================
+# UNDERGRADUATE EDUCATION FIELDS (Added January 28, 2026)
+# ============================================================================
+
+undergraduate_school_name:
+  required: false
+  validation_type: "text_presence"
+  min_length: 3
+  max_length: 150
+  error_message: "Undergraduate School Name should be 3-150 characters if provided"
+  field_category: "education"
+  extraction:
+    labels:
+      - "School :"
+      - "School:"
+      - "School"
+    pattern: "[A-Za-z][A-Za-z \\-'&]+(?:University|College|School|Institute|Academy)?"
+    section: "undergraduate_education"
+    max_distance: 100
+    confidence_threshold: 0.85
+    notes: "Undergraduate school name from EDUCATION section"
+
+undergraduate_degree:
+  required: false
+  validation_type: "text_presence"
+  min_length: 3
+  max_length: 100
+  error_message: "Undergraduate Degree should be 3-100 characters if provided"
+  field_category: "education"
+  extraction:
+    labels:
+      - "Degree :"
+      - "Degree:"
+      - "Degree"
+    pattern: "[A-Za-z][A-Za-z \\-()]*"
+    section: "undergraduate_education"
+    max_distance: 100
+    confidence_threshold: 0.85
+    notes: "Undergraduate degree type (e.g., Bachelor of Science, BA, BS)"
+
+undergraduate_graduation_date:
+  required: false
+  validation_type: "date"
+  must_be_past: true
+  error_message: "Undergraduate Graduation Date must be a valid past date"
+  field_category: "education"
+  extraction:
+    labels:
+      - "Graduation Date :"
+      - "Graduation Date:"
+      - "Graduation Date"
+    pattern: "\\d{1,2}/\\d{1,2}/\\d{4}|\\d{4}-\\d{2}-\\d{2}"
+    section: "undergraduate_education"
+    max_distance: 50
+    confidence_threshold: 0.90
+    date_formats:
+      - "%m/%d/%Y"
+      - "%Y-%m-%d"
+    notes: "Undergraduate graduation date"
+
+
+# ============================================================================
+# CULTURAL COMPETENCY FIELDS (Added January 28, 2026)
+# ============================================================================
+
+cultural_competency_training:
+  required: false
+  validation_type: "enum"
+  allowed_values: ["Yes", "No", "Y", "N"]
+  error_message: "Cultural Competency Training must be Yes or No"
+  field_category: "training"
+  extraction:
+    labels:
+      - "Have you completed cultural competency training?"
+      - "cultural competency training"
+    pattern: "Yes|No|Y|N"
+    section: "training_information"
+    max_distance: 30
+    confidence_threshold: 0.95
+    notes: "Whether provider has completed cultural competency training"
 
 
 # ============================================================================
@@ -606,8 +1674,13 @@ _extraction_config:
     professional_identification_numbers: "Professional identification numbers (NPI, Medicaid, etc.)"
     licensure: "Professional licenses and certifications"
     professional_liability_insurance: "Professional liability insurance coverage details"
-    education: "Educational background"
-    training: "Training and experience"
+    specialty_information: "Specialty and certification details (Primary/Secondary Specialty, Board Certification)"
+    education: "Educational background (Professional/Graduate School)"
+    undergraduate_education: "Undergraduate education details"
+    training_information: "Training and cultural competency"
+    credentialing_information: "Credentialing contact information"
+    billing_contact: "Billing contact information from Practice Locations"
+    home_address: "Home/Mailing address from Personal Information"
     disclosure: "Disclosure questions"
 
   notes: |

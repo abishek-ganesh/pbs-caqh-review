@@ -288,7 +288,8 @@ def extract_insurance_fields(text: str) -> dict:
         }
     """
     # Find the INSURANCE INFORMATION section
-    insurance_section_pattern = r'INSURANCE\s+INFORMATION'
+    # Handle both normal text ("INSURANCE INFORMATION") and concatenated PDF text ("INSURANCEINFORMATION")
+    insurance_section_pattern = r'INSURANCE\s*INFORMATION'
     section_match = re.search(insurance_section_pattern, text, re.IGNORECASE)
 
     if not section_match:
@@ -321,11 +322,12 @@ def extract_insurance_fields(text: str) -> dict:
 
     # Extract ALL insurance policies in this section
     # A policy starts with "Policy Number" and contains multiple fields
-    # Handle OCR split where "Policy" and "Number" may be on different lines:
+    # Handle OCR split and concatenated text:
     #   - "Policy Number : 6799172" (normal)
+    #   - "PolicyNumber:  6799172" (concatenated PDF text)
     #   - "Policy  6799172\nNumber :" (OCR split - value between Policy and Number)
     policy_patterns = [
-        r'Policy\s+Number\s*:?\s*([A-Z0-9\-]+)',  # Normal: Policy Number : VALUE
+        r'Policy\s*Number\s*:?\s*([A-Z0-9\-]+)',  # Normal + concatenated: PolicyNumber : VALUE
         r'Policy\s+([A-Z0-9\-]{5,})\s*\n?\s*Number\s*:',  # OCR split: Policy VALUE \n Number :
     ]
 
@@ -468,8 +470,9 @@ def _extract_date_near_label(
     date_pattern = r'\d{1,2}[/-]\d{1,2}[/-]\d{4}'
 
     for label in label_variants:
-        # Find the label in text (case insensitive, flexible whitespace)
-        label_pattern = re.escape(label).replace(r'\ ', r'\s+')
+        # Find the label in text (case insensitive, flexible whitespace including zero-width)
+        # Handle concatenated PDF text where spaces may be missing
+        label_pattern = re.escape(label).replace(r'\ ', r'\s*')
         label_match = re.search(label_pattern, text, re.IGNORECASE)
 
         if not label_match:
@@ -551,8 +554,8 @@ def _extract_single_policy(policy_text: str) -> dict:
     """
     extracted = {}
 
-    # Policy Number
-    policy_num_match = re.search(r'Policy\s+Number\s*:?\s*([A-Z0-9\-]+)', policy_text, re.IGNORECASE)
+    # Policy Number (handle concatenated text: "PolicyNumber:")
+    policy_num_match = re.search(r'Policy\s*Number\s*:?\s*([A-Z0-9\-]+)', policy_text, re.IGNORECASE)
     extracted['insurance_policy_number'] = policy_num_match.group(1).strip() if policy_num_match else None
 
     # Covered Practice Location (may be empty or split across lines)
@@ -562,7 +565,7 @@ def _extract_single_policy(policy_text: str) -> dict:
     #   "Corporation Central Florida"       <- after label
     # We need to capture and combine both parts.
 
-    covered_label_match = re.search(r'Covered\s+Practice\s+Locations?\s*:?', policy_text, re.IGNORECASE)
+    covered_label_match = re.search(r'Covered\s*Practice\s*Locations?\s*:?', policy_text, re.IGNORECASE)
 
     if covered_label_match:
         label_start = covered_label_match.start()
@@ -658,12 +661,12 @@ def _extract_single_policy(policy_text: str) -> dict:
     # label may be split across lines, or carrier name itself may be split
     extracted['insurance_carrier_name'] = _extract_carrier_name(policy_text)
 
-    # Insurance Address Street 1
-    street1_match = re.search(r'Street\s+1\s*:?\s*([^\n:]+)', policy_text, re.IGNORECASE)
+    # Insurance Address Street 1 (handle concatenated text)
+    street1_match = re.search(r'Street\s*1\s*:?\s*([^\n:]+)', policy_text, re.IGNORECASE)
     extracted['insurance_address_street_1'] = street1_match.group(1).strip() if street1_match else None
 
     # Insurance Address Street 2
-    street2_match = re.search(r'Street\s+2\s*:?\s*([^\n:]+?)(?=\n|City|$)', policy_text, re.IGNORECASE)
+    street2_match = re.search(r'Street\s*2\s*:?\s*([^\n:]+?)(?=\n|City|$)', policy_text, re.IGNORECASE)
     if street2_match:
         street2 = street2_match.group(1).strip()
         extracted['insurance_address_street_2'] = street2 if street2 and len(street2) > 1 else None
@@ -686,9 +689,41 @@ def _extract_single_policy(policy_text: str) -> dict:
     else:
         extracted['insurance_address_country'] = None
 
-    # Insurance Address Zip Code
-    zip_match = re.search(r'Zip\s+Code\s*:?\s*(\d{5}(?:-\d{4})?)', policy_text, re.IGNORECASE)
+    # Insurance Address Zip Code (handle concatenated text: "ZipCode:")
+    zip_match = re.search(r'Zip\s*Code\s*:?\s*(\d{5}(?:-\d{4})?)', policy_text, re.IGNORECASE)
     extracted['insurance_address_zip'] = zip_match.group(1).strip() if zip_match else None
+
+    # Amount of Coverage Per Occurrence (e.g., "$1,000,000.00")
+    # Handle concatenated: "Amountofcoverageperoccurrence: $1,000,000.00"
+    occurrence_match = re.search(
+        r'(?:Amount\s*of\s*)?coverage\s*per\s*occurrence\s*:?\s*(\$?[\d,]+(?:\.\d{2})?)',
+        policy_text, re.IGNORECASE
+    )
+    extracted['insurance_each_occurrence'] = occurrence_match.group(1).strip() if occurrence_match else None
+
+    # Amount of Coverage Aggregate (e.g., "$3,000,000.00")
+    # Handle concatenated: "Amountofcoverageaggregate: $3,000,000.00"
+    aggregate_match = re.search(
+        r'coverage\s*aggregate\s*:?\s*(\$?[\d,]+(?:\.\d{2})?)',
+        policy_text, re.IGNORECASE
+    )
+    extracted['insurance_general_aggregate'] = aggregate_match.group(1).strip() if aggregate_match else None
+
+    # Individual Coverage (Yes/No)
+    # Handle concatenated: "IndividualCoverage:  No"
+    individual_match = re.search(
+        r'Individual\s*Coverage\s*:?\s*(Yes|No|Y|N)',
+        policy_text, re.IGNORECASE
+    )
+    extracted['insurance_individual_coverage'] = individual_match.group(1).strip() if individual_match else None
+
+    # Self-Insured (Yes/No)
+    # Handle: "Self-Insured?  No" or "Self Insured: No"
+    self_insured_match = re.search(
+        r'Self[\s-]*Insured\s*\??\s*:?\s*(Yes|No|Y|N)',
+        policy_text, re.IGNORECASE
+    )
+    extracted['insurance_self_insured'] = self_insured_match.group(1).strip() if self_insured_match else None
 
     return extracted
 
@@ -734,8 +769,9 @@ def _extract_carrier_name(policy_text: str) -> Optional[str]:
     candidates = []
 
     # === PATTERN 1: Normal - carrier name AFTER label on same line ===
+    # Handle concatenated text: "Carrier/SelfInsured" or "Carrier/Self Insured"
     match1 = re.search(
-        r'Carrier/Self\s+Insured(?:\s+Name)?\s*:?\s+([A-Za-z][^\n]{5,80})',
+        r'Carrier/Self\s*Insured(?:\s*Name)?\s*:?\s+([A-Za-z][^\n]{5,80})',
         policy_text,
         re.IGNORECASE
     )
@@ -745,7 +781,7 @@ def _extract_carrier_name(policy_text: str) -> Optional[str]:
             candidates.append((name, 1, match1.start()))
 
     # === PATTERN 2: Carrier BEFORE label ===
-    label_match = re.search(r'Carrier/Self\s+Insured', policy_text, re.IGNORECASE)
+    label_match = re.search(r'Carrier/Self\s*Insured', policy_text, re.IGNORECASE)
     if label_match:
         before_text = policy_text[:label_match.start()]
         lines_before = before_text.strip().split('\n')

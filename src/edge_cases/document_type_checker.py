@@ -57,7 +57,9 @@ class DocumentTypeChecker:
     ALTERNATIVE_DATA_SUMMARY_MARKERS = [
         "Data Summary",           # Standard CAQH export
         "CAQH Provider ID",       # Browser-printed format (e.g., "Provider CAQH ID 16624351")
+        "Provider CAQH",          # OCR variation - reversed order (e.g., "Provider CAQH  16644960")
         "Attestation Date",       # Browser-printed format header
+        "Attestation",            # OCR variation - "Attestation" without "Date" suffix
         "CAQH Data Summary Date", # Some exports have this variant
     ]
 
@@ -71,6 +73,7 @@ class DocumentTypeChecker:
     ]
 
     # Known wrong document patterns (case-insensitive)
+    # These are checked when CAQH markers are missing
     WRONG_DOCUMENT_PATTERNS = [
         "liability coverage",
         "insurance certificate",
@@ -78,6 +81,14 @@ class DocumentTypeChecker:
         "curriculum vitae",
         "attestation letter",
         "reference letter",
+    ]
+
+    # CAQH-related documents that are NOT Data Summaries (checked even with CAQH markers)
+    # These are often confused with Data Summaries but are the wrong document type
+    CAQH_WRONG_FORMAT_PATTERNS = [
+        "provider application",    # CAQH Provider Application form (fillable form, not summary)
+        "std. app.",               # Standard Application form marker
+        "complete only this application",  # Application form instructions
     ]
 
     def __init__(self, sharepoint_help_url: Optional[str] = None):
@@ -178,6 +189,9 @@ class DocumentTypeChecker:
         """
         Count how many expected sections are present.
 
+        Handles both normal text ("Individual NPI") and concatenated text
+        from PDF extraction ("individualnpi") where spaces are stripped.
+
         Args:
             text: Extracted text from PDF
 
@@ -188,7 +202,9 @@ class DocumentTypeChecker:
         sections_found = 0
 
         for section, description in self.EXPECTED_SECTIONS:
-            if section.lower() in text_lower:
+            section_lower = section.lower()
+            # Check with spaces (normal text) OR without spaces (concatenated PDF text)
+            if section_lower in text_lower or section_lower.replace(" ", "") in text_lower:
                 sections_found += 1
 
         return sections_found
@@ -206,6 +222,27 @@ class DocumentTypeChecker:
         text_lower = text.lower()
 
         for pattern in self.WRONG_DOCUMENT_PATTERNS:
+            if pattern in text_lower:
+                return pattern
+
+        return None
+
+    def check_caqh_wrong_format(self, text: str) -> Optional[str]:
+        """
+        Check for CAQH-related documents that are NOT Data Summaries.
+
+        These documents have CAQH markers but are the wrong format
+        (e.g., Provider Application forms instead of Data Summary exports).
+
+        Args:
+            text: Extracted text from PDF
+
+        Returns:
+            Pattern matched if wrong format detected, None otherwise
+        """
+        text_lower = text.lower()
+
+        for pattern in self.CAQH_WRONG_FORMAT_PATTERNS:
             if pattern in text_lower:
                 return pattern
 
@@ -307,6 +344,22 @@ class DocumentTypeChecker:
         structure_result = self.check_document_structure(extracted_text, has_caqh_markers=has_caqh_markers)
         if structure_result:
             return structure_result
+
+        # 4. Check for CAQH-related documents that are NOT Data Summaries
+        # (e.g., Provider Application forms have CAQH markers but are wrong format)
+        wrong_format = self.check_caqh_wrong_format(extracted_text)
+        if wrong_format:
+            return DocumentTypeResult(
+                is_valid_caqh=False,
+                document_type="wrong_document",
+                message=(
+                    f"Document appears to be a CAQH '{wrong_format}', not a CAQH Data Summary. "
+                    f"Please submit the CAQH Data Summary PDF export from CAQH ProView, "
+                    f"not the Provider Application form."
+                ),
+                recommendation="reject_wrong_document",
+                help_url=self.sharepoint_help_url
+            )
 
         # All checks passed - valid CAQH document
         sections_found = self.check_expected_sections(extracted_text)

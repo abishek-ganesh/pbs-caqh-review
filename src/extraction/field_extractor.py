@@ -778,6 +778,21 @@ def extract_all_fields(
             errors=[error_message]
         )
 
+    # Load extraction configuration early (needed for field names in error cases)
+    try:
+        config = load_extraction_config()
+    except Exception as e:
+        return DocumentExtractionResult(
+            pdf_path=str(pdf_path),
+            pdf_filename=pdf_file.name,
+            total_fields_attempted=0,
+            fields_extracted=0,
+            field_results=[],
+            extraction_time=time.time() - start_time,
+            extraction_method="config_failed",
+            errors=[f"Failed to load extraction config: {e}"]
+        )
+
     # Read PDF text
     try:
         text = read_pdf_text(pdf_path)
@@ -804,18 +819,8 @@ def extract_all_fields(
         # Wrong document type - return None for all fields
         # Create field results with None values for all requested fields
         if field_names is None:
-            field_names = [
-                "medicaid_id",
-                "ssn",
-                "individual_npi",
-                "practice_location_name",
-                "professional_license_expiration_date",
-                "insurance_policy_number",
-                "insurance_covered_location",
-                "insurance_current_effective_date",
-                "insurance_current_expiration_date",
-                "insurance_carrier_name"
-            ]
+            # Use ALL fields from config (68 fields)
+            field_names = [key for key in config.keys() if not key.startswith('_')]
 
         field_results = []
         for field_name in field_names:
@@ -841,36 +846,11 @@ def extract_all_fields(
             notes=f"Document type: {doc_type_result.document_type}"
         )
 
-    # Load extraction configuration
-    try:
-        config = load_extraction_config()
-    except Exception as e:
-        return DocumentExtractionResult(
-            pdf_path=str(pdf_path),
-            pdf_filename=pdf_file.name,
-            total_fields_attempted=0,
-            fields_extracted=0,
-            field_results=[],
-            extraction_time=time.time() - start_time,
-            extraction_method="config_failed",
-            errors=[f"Failed to load extraction config: {e}"]
-        )
-
     # Determine which fields to extract
     if field_names is None:
-        # Default: Extract all 10 POC fields (5 identification + 5 insurance)
-        field_names = [
-            "medicaid_id",
-            "ssn",
-            "individual_npi",
-            "practice_location_name",
-            "professional_license_expiration_date",
-            "insurance_policy_number",
-            "insurance_covered_location",
-            "insurance_current_effective_date",
-            "insurance_current_expiration_date",
-            "insurance_carrier_name"
-        ]
+        # Default: Extract ALL fields from config (68 fields)
+        # Exclude private keys like _extraction_config
+        field_names = [key for key in config.keys() if not key.startswith('_')]
 
     # Extract each field
     field_results = []
@@ -955,19 +935,9 @@ def extract_all_fields_from_text(
 
     # Determine which fields to extract
     if field_names is None:
-        # Default: Extract all 10 POC fields (5 identification + 5 insurance)
-        field_names = [
-            "medicaid_id",
-            "ssn",
-            "individual_npi",
-            "practice_location_name",
-            "professional_license_expiration_date",
-            "insurance_policy_number",
-            "insurance_covered_location",
-            "insurance_current_effective_date",
-            "insurance_current_expiration_date",
-            "insurance_carrier_name"
-        ]
+        # Default: Extract ALL fields from config (68 fields)
+        # Exclude private keys like _extraction_config
+        field_names = [key for key in config.keys() if not key.startswith('_')]
 
     # Extract each field from the provided text
     field_results = []
